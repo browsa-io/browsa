@@ -1,0 +1,735 @@
+#!/usr/bin/env node
+/**
+ * MCP server for Browsa.
+ *
+ * Drive real browsers from any MCP-compatible client (Claude Desktop,
+ * Cursor, Cline, Continue, Zed, etc.) with one config line. Customer
+ * minutes-to-first-success drops from "read docs → write code" to
+ * "paste config → ask Claude to scrape something".
+ *
+ * Required env:
+ *   BROWSA_API_KEY=agt_live_...    your platform key
+ *
+ * Optional env:
+ *   BROWSA_BASE_URL               override prod URL (e.g. for staging)
+ *   BROWSA_LLM                    default LLM for run_task (overridable per call):
+ *                                 a provider model, or a hosted tier (browsa,
+ *                                 browsa-fast, browsa-smart)
+ *   BROWSA_LLM_KEY_ID             default saved LLM key id (see list_llm_keys)
+ *   BROWSA_LLM_API_KEY            per-task LLM key. Not needed when the workspace
+ *                                 has a default saved key: save one at
+ *                                 https://app.browsa.io/dashboard/llm-keys and the
+ *                                 MCP config holds no LLM secret.
+ *   BROWSA_COUNTRY=US             default egress country
+ *
+ * Claude Desktop config snippet (mcp.json):
+ *
+ *   {
+ *     "mcpServers": {
+ *       "browsa": {
+ *         "command": "npx",
+ *         "args": ["-y", "@browsa/mcp"],
+ *         "env": {
+ *           "BROWSA_API_KEY": "agt_live_..."
+ *         }
+ *       }
+ *     }
+ *   }
+ *
+ * That's it. Claude can now drive a real Chromium fork.
+ */
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import { Client, BrowsaError } from "browsa";
+
+const API_KEY = process.env.BROWSA_API_KEY;
+const BASE_URL = process.env.BROWSA_BASE_URL;
+// Unset by default: with a saved key the server picks the model for the
+// key's provider. A per-task key (llm_api_key) needs a model, so it gets
+// BYOK_DEFAULT_LLM when neither the call nor BROWSA_LLM names one.
+const DEFAULT_LLM = process.env.BROWSA_LLM || undefined;
+const BYOK_DEFAULT_LLM = "claude-opus-5-5";
+const DEFAULT_LLM_KEY = process.env.BROWSA_LLM_API_KEY || undefined;
+const DEFAULT_LLM_KEY_ID = process.env.BROWSA_LLM_KEY_ID || undefined;
+const DEFAULT_COUNTRY = process.env.BROWSA_COUNTRY;
+const LLM_KEYS_URL = "https://app.browsa.io/dashboard/llm-keys";
+
+if (!API_KEY) {
+  console.error("[browsa-mcp] BROWSA_API_KEY env var is required");
+  console.error("           Mint one at https://app.browsa.io/dashboard/keys");
+  process.exit(2);
+}
+
+const client = new Client({
+  apiKey: API_KEY,
+  ...(BASE_URL ? { baseUrl: BASE_URL } : {}),
+});
+
+const server = new Server(
+  { name: "browsa", version: "0.3.0" },
+  { capabilities: { tools: {} } },
+);
+
+// ── Tool catalog ────────────────────────────────────────────────────────
+
+const REASONING_PROP = {
+  type: "string",
+  enum: ["low", "medium", "high"],
+  description: "How much the model reasons. Omit for the tier's or the provider's default.",
+} as const;
+
+const tools = [
+  {
+    name: "run_task",
+    description:
+      "Run a browser-driven AI task on a fresh real Chromium burner. " +
+      "Returns the final result, total steps, and a live noVNC URL the user " +
+      "can open to watch the browser drive in real time. Use this when the " +
+      "user asks for anything web-shaped: scrape, fill, click, extract, login, " +
+      "place an order, search, summarize a page, etc. The browser is a real " +
+      "macOS-Chrome-fingerprinted Chromium with built-in CAPTCHA solving " +
+      "(Turnstile, hCaptcha, reCAPTCHA, ALTCHA, FunCaptcha) and behavioral " +
+      "humanization. Default timeout: 10 minutes.",
+    inputSchema: {
+      type: "object",
+      required: ["task"],
+      properties: {
+        task: {
+          type: "string",
+          description:
+            "Plain-English instructions for the browser agent. Be specific " +
+            "about what to extract and the desired output shape (JSON, list, " +
+            "etc.). Example: 'Go to news.ycombinator.com and return the top 3 " +
+            "story titles + URLs as JSON.'",
+        },
+        llm: {
+          type: "string",
+          description:
+            `LLM identifier, e.g. anthropic:claude-sonnet-5-5, openai:gpt-4o, google:gemini-2.5-flash` +
+            `${DEFAULT_LLM ? ` (default: ${DEFAULT_LLM})` : ""}. Omit to use the workspace's default saved key ` +
+            `with its provider's default model; if no key is saved at all, the task runs on Browsa's hosted ` +
+            `model and the result says so. Hosted tiers need no LLM key and add a flat credit surcharge per ` +
+            `task (see list_models): "browsa" (default hosted model), "browsa-fast" (fastest and lightest), ` +
+            `"browsa-smart" (for harder tasks). When you name a model, there is no hosted fallback.`,
+        },
+        reasoning: REASONING_PROP,
+        llm_key_id: {
+          type: "string",
+          description:
+            "Id of a saved LLM key of this workspace (see list_llm_keys). " +
+            `Default: ${DEFAULT_LLM_KEY_ID ? "BROWSA_LLM_KEY_ID" : "none"}. Usually not needed: with no key ` +
+            "given, the workspace's default saved key for the provider of llm is used.",
+        },
+        llm_api_key: {
+          type: "string",
+          description:
+            "Per-task LLM provider key. Rarely needed: prefer a saved key (llm_key_id, or the " +
+            "workspace default) so the secret never passes through the chat. Overrides llm_key_id.",
+        },
+        country: {
+          type: "string",
+          description: `2-letter egress country (e.g. US, GB, DE). Default: ${DEFAULT_COUNTRY ?? "auto"}.`,
+        },
+        max_steps: { type: "integer", description: "Max agent steps. Default 25. Increase for complex multi-page tasks." },
+        initial_url: { type: "string", description: "Optional pre-navigation URL (saves the first agent step)." },
+        ja3_profile: {
+          type: "string",
+          description: "TLS handshake spoof profile (e.g. macos_chrome_137). Useful for TLS-fingerprinted sites.",
+        },
+        profile_id: {
+          type: "string",
+          description:
+            "Id of a persistent identity (agt_..., from list_identities). If set, reuses that browser " +
+            "identity (cookies, history, fingerprint stay sticky). Omit for a fresh burner.",
+        },
+        timeout_minutes: {
+          type: "integer",
+          description: "Max wall-clock minutes to wait before returning. Default 10.",
+          minimum: 1,
+          maximum: 30,
+        },
+      },
+    },
+  },
+  {
+    name: "get_job",
+    description:
+      "Fetch the current state of a previously-submitted job by UUID. Returns " +
+      "status (queued|running|completed|failed|input_required; a cancelled job is failed with " +
+      "error_code CANCELLED), step " +
+      "count, final_result text if terminal, and the live_url for the noVNC " +
+      "stream. Cheap — call repeatedly to poll a long-running job started by run_task.",
+    inputSchema: {
+      type: "object",
+      required: ["job_id"],
+      properties: {
+        job_id: { type: "string", description: "Job UUID returned by run_task or list_jobs." },
+        wait_seconds: {
+          type: "integer",
+          description: "If set (1-120), block server-side until the job reaches a terminal state or N seconds elapse.",
+          minimum: 0,
+          maximum: 120,
+        },
+      },
+    },
+  },
+  {
+    name: "cancel_job",
+    description:
+      "Cancel a queued or running job. The job ends as failed with error_code CANCELLED and keeps its " +
+      "browser charge. A job that already finished returns an error with code JOB_NOT_CANCELLABLE.",
+    inputSchema: {
+      type: "object",
+      required: ["job_id"],
+      properties: { job_id: { type: "string", description: "Job UUID." } },
+    },
+  },
+  {
+    name: "respond_to_job",
+    description:
+      "Answer an input_required prompt (CAPTCHA solution, human decision point). Flips the job back to running.",
+    inputSchema: {
+      type: "object",
+      required: ["job_id", "response"],
+      properties: {
+        job_id: { type: "string" },
+        response: { type: "string", description: "Your answer to the agent's question." },
+      },
+    },
+  },
+  {
+    name: "start_browser",
+    description:
+      "Start a real cloud browser and return its CDP URL, so you can drive it yourself with Playwright or " +
+      "Puppeteer (connect_over_cdp) instead of handing the work to run_task. Use this when you want to write " +
+      "the browser steps, or need the page open across several of your own tool calls. Billed per browser; " +
+      "always call stop_browser when you are done. Without a proxy the browser uses Browsa's data-center IP.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ttl: { type: "string", description: "How long to keep it, e.g. \"5m\" or \"1h\". Default 10m." },
+        country: { type: "string", description: "ISO-2 country, e.g. \"us\". Takes effect only with a proxy." },
+        os_type: { type: "string", description: "Operating system the browser presents, e.g. \"macos\", \"windows\"." },
+        profile_id: {
+          type: "string",
+          description:
+            "Reuse a saved identity (see list_identities) so the browser starts with its cookies and logins.",
+        },
+        proxy: {
+          type: "object",
+          description:
+            "One of two forms. Your own proxy: give host and port, or server as \"host:port\" / " +
+            "\"socks5://host:port\", plus username and password when it needs them. Or a tier of Browsa's " +
+            "built-in proxy network, billed per GB from credits: {\"network\": \"datacenter\"} or " +
+            "{\"network\": \"residential\", \"country\": \"us\"}, with nothing else next to network. " +
+            "The built-in network works only when the proxy_network tool reports enabled: call it first " +
+            "for the tiers, their countries and the price per GB.",
+          properties: {
+            network: { type: "string", enum: ["datacenter", "residential"], description: "Built-in network tier. Not together with host, port, server, username, password or type." },
+            country: { type: "string", description: "Lowercase ISO alpha-2 exit country, e.g. \"us\". Optional." },
+            type: { type: "string", enum: ["http", "https", "socks5"], description: "Own proxy only." },
+            host: { type: "string", description: "Own proxy only." },
+            port: { type: "integer", description: "Own proxy only." },
+            server: { type: "string", description: "Own proxy only: \"host:port\" or \"scheme://host:port\"." },
+            username: { type: "string", description: "Own proxy only." },
+            password: { type: "string", description: "Own proxy only." },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: "proxy_network",
+    description:
+      "Say whether Browsa's built-in proxy network is enabled on this server and, when it is, list its " +
+      "tiers (datacenter, residential) with the exit countries of each and the price per GB in credits. " +
+      "Call this before passing proxy {\"network\": ...} to start_browser. When enabled is false, only " +
+      "your own proxy can be used.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "stop_browser",
+    description:
+      "Stop a browser started with start_browser and release it. Always call this when finished; an unused " +
+      "browser keeps running until its ttl expires.",
+    inputSchema: {
+      type: "object",
+      required: ["browser_id"],
+      properties: { browser_id: { type: "string", description: "The id returned by start_browser." } },
+    },
+  },
+  {
+    name: "list_browsers",
+    description: "List this workspace's browsers (burners and saved identities) with their status.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "credits",
+    description: "Get the current credit balance + available top-up packs.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "list_webhooks",
+    description: "List webhook subscriptions for this workspace.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "create_webhook",
+    description:
+      "Register a callback URL the platform will POST lifecycle events to (HMAC-SHA256 signed via X-Agents-Signature). " +
+      "Use the verify helper from browsa/webhooks in your receiver.",
+    inputSchema: {
+      type: "object",
+      required: ["url"],
+      properties: {
+        url: { type: "string", description: "HTTPS endpoint you control." },
+        events: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Event filter. Omit/empty for ALL events. Examples: job.completed, job.failed, agent.started.",
+        },
+      },
+    },
+  },
+  {
+    name: "delete_webhook",
+    description: "Delete (disable) a webhook subscription by id.",
+    inputSchema: {
+      type: "object",
+      required: ["webhook_id"],
+      properties: { webhook_id: { type: "string" } },
+    },
+  },
+  {
+    name: "list_identities",
+    description:
+      "List persistent browser identities (long-lived cookies/history/fingerprint, billed monthly). Use one in " +
+      "run_task via profile_id to reuse a warmed-up session — critical for sites that fingerprint cookie age, " +
+      "session continuity, or behavioral history (Akamai, Cloudflare-strict, DataDome).",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "create_schedule",
+    description:
+      "Schedule a browser task to run automatically on a fixed interval (min 1 hour). Each run is a " +
+      "normal billed task. LLM key: same rules as run_task (the workspace's default saved key unless " +
+      "llm_key_id is given); the schedule stores only the saved key's id. With no llm and no saved key, " +
+      "the schedule runs on Browsa's hosted model and the result says so. Pass llm \"browsa\", " +
+      "\"browsa-fast\" or \"browsa-smart\" to choose a hosted tier.",
+    inputSchema: {
+      type: "object",
+      required: ["task", "interval_seconds"],
+      properties: {
+        task: { type: "string", description: "Plain-English task instructions (same as run_task)." },
+        interval_seconds: { type: "integer", description: "Run interval in seconds. 3600 (1h) – 2592000 (30d).", minimum: 3600, maximum: 2592000 },
+        name: { type: "string", description: "Optional label for the schedule." },
+        llm: {
+          type: "string",
+          description:
+            `LLM id${DEFAULT_LLM ? ` (default ${DEFAULT_LLM})` : ""}. Omit to use the workspace's default saved key ` +
+            `(hosted model if none is saved). Hosted tiers: "browsa", "browsa-fast", "browsa-smart".`,
+        },
+        reasoning: REASONING_PROP,
+        llm_key_id: { type: "string", description: "Id of a saved LLM key (see list_llm_keys). Optional." },
+        llm_api_key: {
+          type: "string",
+          description: "Per-schedule LLM key. Rarely needed: prefer a saved key. Overrides llm_key_id.",
+        },
+        country: { type: "string", description: "2-letter egress country." },
+        max_steps: { type: "integer", description: "Max agent steps per run." },
+        initial_url: { type: "string", description: "Optional pre-navigation URL." },
+      },
+    },
+  },
+  {
+    name: "list_schedules",
+    description: "List this workspace's scheduled tasks (id, task, interval, next run, run count). Secrets redacted.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "list_llm_keys",
+    description:
+      "List the LLM provider keys saved in this workspace: id, name, provider, masked key (prefix + last 4), " +
+      "whether it is the default for its provider, and its status (valid, invalid or unchecked). Never returns " +
+      "a secret. Pass an id as llm_key_id to run_task or create_schedule. Keys are added at " +
+      LLM_KEYS_URL + ".",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "list_models",
+    description:
+      "List the hosted tiers (browsa, browsa-fast, browsa-smart: the model each runs on, its default reasoning " +
+      "and credits per task) and the providers a saved or per-task LLM key can be for. Read-only and free.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "list_job_files",
+    description: "List the output files a task wrote — extracted data + a session.gif recording. Returns name + size per file.",
+    inputSchema: {
+      type: "object",
+      required: ["job_id"],
+      properties: { job_id: { type: "string", description: "The job id from run_task / create_task." } },
+    },
+  },
+] as const;
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+
+// ── Tool dispatch ───────────────────────────────────────────────────────
+
+function ok(payload: unknown) {
+  return {
+    content: [{ type: "text" as const, text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) }],
+  };
+}
+
+function fail(message: string, extra?: Record<string, unknown>) {
+  const body = extra ? { error: message, ...extra } : { error: message };
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }],
+  };
+}
+
+type LlmChoice = {
+  llm?: string;
+  llmApiKey?: string;
+  llmKeyId?: string;
+  /** per_task: a key in the request; saved: by id; default: the workspace default saved key; hosted: a hosted tier. */
+  source: "per_task" | "saved" | "default" | "hosted";
+};
+
+// Which LLM key to send. Per-call arguments beat env defaults, and a
+// per-task key beats a saved key id (the server's own order). With no key
+// at all, nothing is sent and the server uses the workspace's default saved
+// key, so the MCP config never needs the LLM secret.
+function chooseLlm(args: Record<string, any>): LlmChoice {
+  const llm: string | undefined = args.llm ?? DEFAULT_LLM;
+  // Hosted tiers ("browsa", "browsa-fast", "browsa-smart") take no key.
+  const tier = String(llm ?? "").trim().toLowerCase();
+  if (tier === "browsa" || tier.startsWith("browsa-")) return { llm: tier, source: "hosted" };
+  if (args.llm_api_key) return { llm: llm ?? BYOK_DEFAULT_LLM, llmApiKey: args.llm_api_key, source: "per_task" };
+  if (args.llm_key_id) return { llm, llmKeyId: args.llm_key_id, source: "saved" };
+  if (DEFAULT_LLM_KEY) return { llm: llm ?? BYOK_DEFAULT_LLM, llmApiKey: DEFAULT_LLM_KEY, source: "per_task" };
+  if (DEFAULT_LLM_KEY_ID) return { llm, llmKeyId: DEFAULT_LLM_KEY_ID, source: "saved" };
+  return { llm, source: "default" };
+}
+
+const HOSTED: LlmChoice = { llm: "browsa", source: "hosted" };
+
+const NO_KEY_HELP =
+  "No LLM key for this task: the workspace has no default saved key for this model's provider. " +
+  `Save a key at ${LLM_KEYS_URL} (the first key of a provider becomes its default), ` +
+  "or set BROWSA_LLM_API_KEY in the MCP env, or pass llm:\"browsa\" to run on Browsa's hosted model.";
+
+const HOSTED_FALLBACK_TASK_NOTE =
+  "No saved LLM key found, so this ran on Browsa's hosted model (adds credits per task; see list_models). " +
+  `Save a key at ${LLM_KEYS_URL} to use your own.`;
+const HOSTED_FALLBACK_SCHEDULE_NOTE =
+  "No saved LLM key found, so this schedule runs on Browsa's hosted model (adds credits per run; see list_models). " +
+  `Save a key at ${LLM_KEYS_URL} and create the schedule again to use your own.`;
+
+// Zero-config: the caller named no model and no key (and no env default
+// does), and the server has no saved key to use. Then, like before saved
+// keys existed, the call runs on Browsa's hosted model instead of failing.
+function canFallBackToHosted(e: InstanceType<typeof BrowsaError>, choice: LlmChoice): boolean {
+  if (choice.source !== "default" || choice.llm !== undefined) return false;
+  return (e.status === 400 && e.code === "LLM_KEY_REQUIRED") ||
+    (e.status === 503 && e.code === "LLM_KEYS_UNAVAILABLE");
+}
+
+// Submit with the chosen key; on a zero-config "no key" answer, retry once
+// on the hosted model and return a note saying so.
+async function submitWithHostedFallback<T>(
+  choice: LlmChoice,
+  submit: (c: LlmChoice) => Promise<T>,
+): Promise<{ result: T; fellBack: boolean }> {
+  try {
+    return { result: await submit(choice), fellBack: false };
+  } catch (e) {
+    if (e instanceof BrowsaError && canFallBackToHosted(e, choice)) {
+      return { result: await submit(HOSTED), fellBack: true };
+    }
+    throw e;
+  }
+}
+
+// Turn the server's errors about LLM keys into errors that say what to do.
+function llmKeyError(e: InstanceType<typeof BrowsaError>, choice: LlmChoice) {
+  const extra = { code: e.code, status: e.status, request_id: e.requestId, server_error: e.message };
+  if (choice.source === "hosted" || choice.source === "per_task") return null;
+  switch (e.code) {
+    case "LLM_KEY_REQUIRED":
+      return fail(NO_KEY_HELP, extra);
+    case "LLM_KEY_NOT_FOUND":
+      return fail(`Saved LLM key ${choice.llmKeyId} was not found in this workspace. Call list_llm_keys to see the saved keys.`, extra);
+    case "LLM_KEY_REJECTED":
+      return fail(`The provider rejected the saved LLM key. Rotate it at ${LLM_KEYS_URL}, or pick another key with llm_key_id.`, extra);
+    case "LLM_KEY_PROVIDER_MISMATCH":
+      return fail("The saved LLM key is for a different provider than llm. Omit llm to use the key's default model, or pick a matching model.", extra);
+    case "LLM_MODEL_REQUIRED":
+      return fail("This saved key is an OpenAI-compatible key, so the model must be named: pass llm with the model id your endpoint serves.", extra);
+    case "LLM_KEYS_UNAVAILABLE":
+      return fail(
+        "Saved LLM keys are not available on this Browsa server. Set BROWSA_LLM_API_KEY in the MCP env, " +
+          "pass llm_api_key, or pass llm:\"browsa\" to run on Browsa's hosted model.",
+        extra,
+      );
+  }
+  return null;
+}
+
+// GET /v1/proxy-network: the built-in proxy network. Uses fetch directly so
+// it does not depend on the installed browsa SDK version having
+// proxyNetwork(). An API without the endpoint (404) reads as not enabled.
+async function proxyNetwork() {
+  const base = (BASE_URL || "https://browsa.io").replace(/\/+$/, "");
+  const resp = await fetch(`${base}/v1/proxy-network`, {
+    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.0" },
+  });
+  const body: any = await resp.json().catch(() => ({}));
+  if (resp.status === 404) return { enabled: false, tiers: [] };
+  if (!resp.ok) {
+    throw new BrowsaError(body?.error || `HTTP ${resp.status}`, { code: body?.code, requestId: body?.request_id, status: resp.status });
+  }
+  const tiers = body?.enabled === true && Array.isArray(body?.tiers) ? body.tiers : [];
+  return {
+    enabled: body?.enabled === true,
+    tiers: tiers.map((t: any) => ({
+      network: t?.network, credits_per_gb: t?.credits_per_gb, mb_per_credit: t?.mb_per_credit,
+      countries: Array.isArray(t?.countries) ? t.countries : [],
+    })),
+  };
+}
+
+// The proxy usage of a job or a browser, only when it went through the
+// built-in network.
+function proxyUsage(raw: any): Record<string, unknown> {
+  if (!raw || typeof raw.proxy_network !== "string" || !raw.proxy_network) return {};
+  return { proxy_network: raw.proxy_network, proxy_bytes: raw.proxy_bytes ?? 0, proxy_credits: raw.proxy_credits ?? 0 };
+}
+
+// GET a JSON endpoint with fetch directly, so the tool does not depend on
+// the installed browsa SDK version having a method for it.
+async function apiGet(path: string): Promise<any> {
+  const base = (BASE_URL || "https://browsa.io").replace(/\/+$/, "");
+  const resp = await fetch(`${base}${path}`, {
+    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.0" },
+  });
+  const body: any = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new BrowsaError(body?.error || `HTTP ${resp.status}`, { code: body?.code, requestId: body?.request_id, status: resp.status });
+  }
+  return body;
+}
+
+// GET /v1/models as the API sends it: models and credit numbers are server
+// settings, so nothing here is hardcoded.
+async function listModels() {
+  const body = await apiGet("/v1/models");
+  return { hosted: body?.hosted ?? [], own_key: body?.own_key ?? {} };
+}
+
+// The LLM side of a finished job, from its result. Jobs that have none of
+// these (older jobs, or still running) add nothing to the tool result.
+function llmResultFields(job: { raw?: Record<string, any> }) {
+  const r = job.raw?.result;
+  if (!r || typeof r !== "object") return {};
+  return { llm_tier: r.llm_tier, reasoning: r.reasoning, usage: r.usage, llm_cost_usd: r.llm_cost_usd };
+}
+
+// Read-only, masked fields only.
+async function listLlmKeys() {
+  const body = await apiGet("/v1/llm-keys");
+  return {
+    llm_keys: (body?.llm_keys ?? []).map((k: any) => ({
+      id: k.id, name: k.name, provider: k.provider, masked: k.masked, base_url: k.base_url ?? null,
+      is_default: !!k.is_default, status: k.status, status_detail: k.status_detail,
+      status_message: k.status_message, last_validated_at: k.last_validated_at ?? null,
+      last_used_at: k.last_used_at ?? null,
+    })),
+    limit: body?.limit,
+    manage_at: LLM_KEYS_URL,
+  };
+}
+
+server.setRequestHandler(CallToolRequestSchema, async (req) => {
+  const name = req.params.name;
+  const args = (req.params.arguments ?? {}) as Record<string, any>;
+  let choice: LlmChoice | null = null;
+
+  try {
+    switch (name) {
+      case "run_task": {
+        choice = chooseLlm(args);
+        // The "no key" answer comes from POST /v1/tasks, before any job
+        // exists, so retrying runTask on the hosted model is safe.
+        const { result: job, fellBack } = await submitWithHostedFallback(choice, (c) =>
+          client.runTask({
+            task: args.task,
+            // Omitted fields are dropped from the request body.
+            llm: c.llm as string,
+            llmApiKey: c.llmApiKey,
+            llmKeyId: c.llmKeyId,
+            reasoning: args.reasoning,
+            country: args.country ?? DEFAULT_COUNTRY,
+            maxSteps: args.max_steps,
+            initialUrl: args.initial_url,
+            ja3Profile: args.ja3_profile,
+            profileId: args.profile_id,
+            timeoutMs: (args.timeout_minutes ?? 10) * 60_000,
+          }),
+        );
+        return ok({
+          ...(fellBack ? { note: HOSTED_FALLBACK_TASK_NOTE, llm: "browsa" } : {}),
+          job_id: job.id,
+          status: job.status,
+          steps: `${job.stepCount}/${job.progressTotal}`,
+          live_url: job.liveUrl,
+          credits_charged: job.creditsCharged,
+          ...proxyUsage(job.raw),
+          llm_key_masked: job.raw?.llm_key_masked,
+          llm_key_source: job.raw?.llm_key_source,
+          ...llmResultFields(job),
+          final_result: job.finalResult,
+          error: job.errorMessage,
+          error_code: job.errorCode,
+        });
+      }
+      case "get_job": {
+        const job = await client.getJob(args.job_id, { wait: args.wait_seconds ?? 0 });
+        return ok({
+          job_id: job.id,
+          status: job.status,
+          steps: `${job.stepCount}/${job.progressTotal}`,
+          live_url: job.liveUrl,
+          input_question: job.inputQuestion,
+          ...llmResultFields(job),
+          final_result: job.finalResult,
+          error: job.errorMessage,
+          error_code: job.errorCode,
+          ...proxyUsage(job.raw),
+        });
+      }
+      case "cancel_job": {
+        await client.cancelJob(args.job_id);
+        return ok({ cancelled: args.job_id });
+      }
+      case "respond_to_job": {
+        const job = await client.respondToJob(args.job_id, args.response);
+        return ok({ job_id: job.id, status: job.status });
+      }
+      case "start_browser": {
+        const a = await client.createAgent({
+          ttl: args.ttl ?? "10m",
+          country: args.country ?? DEFAULT_COUNTRY,
+          osType: args.os_type,
+          agent_id: args.profile_id,
+          proxy: args.proxy,
+        });
+        return ok({
+          browser_id: a.id,
+          status: a.status,
+          // Connect with playwright.chromium.connect_over_cdp(cdp_http,
+          // headers={"X-API-Key": <your key>}); cdp_url is the page socket.
+          cdp_http: a.cdp_http,
+          cdp_url: a.cdp_url,
+          live_url: a.live_url,
+          expires_at: a.expires_at,
+          credits_charged: a.cost_credits,
+          ...proxyUsage(a),
+          egress: args.proxy?.network ? `Browsa ${args.proxy.network} proxy network` : args.proxy ? "your proxy" : "Browsa's data-center IP",
+          note: "Call stop_browser with this browser_id when you are done.",
+        });
+      }
+      case "stop_browser":
+        await client.destroyAgent(args.browser_id);
+        return ok({ stopped: args.browser_id });
+      case "list_browsers":
+        return ok(await client.listIdentities());
+      case "credits":
+        return ok(await client.credits());
+      case "list_webhooks":
+        return ok(await client.listWebhooks());
+      case "create_webhook":
+        return ok(await client.createWebhook({ url: args.url, events: args.events }));
+      case "delete_webhook":
+        await client.deleteWebhook(args.webhook_id);
+        return ok({ deleted: args.webhook_id });
+      case "list_identities":
+        // GET /v1/agents also lists recent burners (running, destroyed or
+        // failed); only persistent identities can be passed as profile_id.
+        return ok((await client.listIdentities()).filter((a) => a.mode === "persistent"));
+      case "create_schedule": {
+        choice = chooseLlm(args);
+        const { result: s, fellBack } = await submitWithHostedFallback(choice, (c) =>
+          client.createSchedule({
+            name: args.name,
+            task: args.task,
+            llm: c.llm as string,
+            llmApiKey: c.llmApiKey,
+            llmKeyId: c.llmKeyId,
+            reasoning: args.reasoning,
+            intervalSeconds: args.interval_seconds,
+            country: args.country ?? DEFAULT_COUNTRY,
+            maxSteps: args.max_steps,
+            initialUrl: args.initial_url,
+          }),
+        );
+        return ok({
+          ...(fellBack ? { note: HOSTED_FALLBACK_SCHEDULE_NOTE, llm: "browsa" } : {}),
+          id: s.id, name: s.name, interval_seconds: s.intervalSeconds, enabled: s.enabled,
+          next_run_at: s.nextRunAt, llm_key_id: s.raw?.llm_key_id,
+        });
+      }
+      case "list_schedules":
+        return ok(
+          (await client.listSchedules()).map((s) => ({
+            id: s.id, name: s.name, task: s.task, llm: s.llm, reasoning: s.raw?.reasoning ?? undefined,
+            interval_seconds: s.intervalSeconds, enabled: s.enabled,
+            next_run_at: s.nextRunAt, run_count: s.runCount,
+          })),
+        );
+      case "list_job_files":
+        return ok(await client.listJobFiles(args.job_id));
+      case "list_llm_keys":
+        return ok(await listLlmKeys());
+      case "proxy_network":
+        return ok(await proxyNetwork());
+      case "list_models":
+        return ok(await listModels());
+      default:
+        return fail(`unknown tool: ${name}`);
+    }
+  } catch (e) {
+    if (e instanceof BrowsaError) {
+      const keyErr = choice ? llmKeyError(e, choice) : null;
+      if (keyErr) return keyErr;
+      return fail(e.message, {
+        code: e.code,
+        status: e.status,
+        request_id: e.requestId,
+      });
+    }
+    return fail((e as Error).message || String(e));
+  }
+});
+
+// ── stdio transport ─────────────────────────────────────────────────────
+
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  // Log to STDERR — MCP stdio uses STDOUT for protocol frames.
+  console.error("[browsa-mcp] ready (tools=" + tools.length + ")");
+}
+
+main().catch((e) => {
+  console.error("[browsa-mcp] fatal:", e);
+  process.exit(1);
+});

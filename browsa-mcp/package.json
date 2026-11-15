@@ -1,0 +1,57 @@
+{
+  "name": "@browsa/mcp",
+  "version": "0.3.0",
+  "mcpName": "io.browsa/browsa",
+  "description": "MCP server for Browsa: drive real cloud browsers from Claude Desktop, Cursor, Cline, and any MCP-compatible client",
+  "license": "MIT",
+  "author": "Browsa <support@browsa.io>",
+  "homepage": "https://browsa.io",
+  "bugs": {
+    "url": "https://github.com/browsa-io/browsa/issues",
+    "email": "support@browsa.io"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "cursor",
+    "anthropic",
+    "browser-automation",
+    "real-browser",
+    "ai-agents",
+    "browser-use"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "type": "module",
+  "main": "./dist/server.js",
+  "bin": {
+    "browsa-mcp": "dist/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/server.ts --format esm --target node18 --clean --shims",
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build && npm test",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "browsa": "^0.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8",
+    "typescript": "^5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/browsa-io/browsa.git",
+    "directory": "browsa-mcp"
+  }
+}

@@ -1,0 +1,601 @@
+"""Light typed wrappers around the API's JSON envelopes.
+
+Intentionally NOT pydantic — zero deps is a feature (see RATIONALE).
+These are tiny dataclasses that surface the fields you actually use.
+The raw dict is always available on `.raw` for fields we haven't typed.
+"""
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Any, Optional, TypedDict, Union
+
+
+class JobStatus:
+    """String enum of canonical job statuses. Compare with == to literals."""
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INPUT_REQUIRED = "input_required"
+
+    @classmethod
+    def is_terminal(cls, s: str) -> bool:
+        return s in (cls.COMPLETED, cls.FAILED, cls.CANCELLED)
+
+
+def _opt_int(v: Any) -> Optional[int]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return int(v)
+
+
+def _opt_float(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v)
+
+
+def _opt_str(v: Any) -> Optional[str]:
+    return v if isinstance(v, str) and v else None
+
+
+@dataclass
+class Usage:
+    """LLM token use of a finished task (``job.usage``). Counts the server
+    did not send are 0."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    # Number of LLM requests the task made.
+    requests: int = 0
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "Usage":
+        body = body if isinstance(body, dict) else {}
+        return cls(
+            input_tokens=_opt_int(body.get("input_tokens")) or 0,
+            output_tokens=_opt_int(body.get("output_tokens")) or 0,
+            cache_read_tokens=_opt_int(body.get("cache_read_tokens")) or 0,
+            cache_write_tokens=_opt_int(body.get("cache_write_tokens")) or 0,
+            requests=_opt_int(body.get("requests")) or 0,
+            raw=body,
+        )
+
+
+@dataclass
+class Job:
+    """Single job envelope returned by GET /v1/jobs/:id and POST /v1/tasks."""
+    id: str
+    status: str
+    kind: str
+    step_count: int
+    progress_done: int
+    progress_total: int
+    framework: Optional[str] = None
+    live_url: Optional[str] = None
+    agent_id: Optional[str] = None
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error_message: Optional[str] = None
+    error_code: Optional[str] = None
+    credits_charged: Optional[int] = None
+    final_result: Optional[str] = None
+    input_question: Optional[str] = None
+    result_url: Optional[str] = None
+    status_url: Optional[str] = None
+    files: Optional[list] = None
+    # Task secrets the job was given: [{"domain": ..., "name": ...}]. Never values.
+    secret_names: Optional[list] = None
+    # The task text (GET /v1/jobs/:id on a task job).
+    task: Optional[str] = None
+    # Sessions: the session this task belongs to. Set on the 202 of a task
+    # created with keep_browser=True (with session_url), on the 202 of
+    # send_message (with turn, the 1-based turn number). GET /v1/jobs/:id of
+    # a turn has session_id but no turn; run_message() keeps the turn.
+    session_id: Optional[str] = None
+    session_url: Optional[str] = None
+    turn: Optional[int] = None
+    # Saved LLM key the job used (never the secret). llm_key_source is
+    # "saved" when chosen by llm_key_id, "default" for the workspace default.
+    llm_key_id: Optional[str] = None
+    llm_key_masked: Optional[str] = None
+    llm_key_source: Optional[str] = None
+    # How the job ended: who or what ended it (completed, failed,
+    # cancelled_by_user, timed_out, step_limit_reached, budget_reached,
+    # blocked_by_bot_check, never_started, stalled). None until the job is
+    # finished. Beside status / error_code, and can say more: a task a limit
+    # stopped that still returned a partial result is "completed" with
+    # outcome "step_limit_reached". outcome_message is one sentence about
+    # it; signals lists what was seen on the way (bot_check_seen,
+    # bot_check_passed, proxy_failed, ...), empty when nothing was; duration_ms is started_at
+    # to completed_at.
+    outcome: Optional[str] = None
+    outcome_message: Optional[str] = None
+    signals: list = field(default_factory=list)
+    duration_ms: Optional[int] = None
+    # From the finished job's result; all None on jobs that do not have them
+    # (still running, or run before these existed).
+    # usage: the task's LLM token counts.
+    # llm_cost_usd: estimated LLM cost from public list prices. None when
+    # unknown, and always None for hosted runs, which are paid in credits.
+    # llm_tier: the hosted tier that ran it ("browsa", "browsa-fast",
+    # "browsa-smart"); None with your own key.
+    # reasoning: the reasoning level applied ("low", "medium", "high").
+    usage: Optional[Usage] = None
+    llm_cost_usd: Optional[float] = None
+    llm_tier: Optional[str] = None
+    reasoning: Optional[str] = None
+    # Built-in proxy network (only where GET /v1/proxy-network reports
+    # enabled). proxy_network is the tier the job's browser went through
+    # ("datacenter" or "residential"), None when it used your own proxy or
+    # none; proxy_bytes is the data that went through it and proxy_credits
+    # the credits charged for that data (not part of credits_charged).
+    proxy_network: Optional[str] = None
+    proxy_bytes: int = 0
+    proxy_credits: int = 0
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "Job":
+        result = body.get("result") or {}
+        if not isinstance(result, dict):
+            result = {}
+        final_result = result.get("final_result")
+        raw_files = result.get("files")
+        files = [JobFile.from_response(f) for f in raw_files] if raw_files else None
+        raw_usage = result.get("usage")
+        return cls(
+            id=body.get("id") or body.get("job_id") or "",
+            status=body.get("status") or "",
+            kind=body.get("kind") or "",
+            step_count=int(body.get("step_count") or 0),
+            progress_done=int(body.get("progress_done") or 0),
+            progress_total=int(body.get("progress_total") or 0),
+            framework=body.get("framework"),
+            live_url=body.get("live_url"),
+            agent_id=body.get("agent_id"),
+            created_at=body.get("created_at"),
+            started_at=body.get("started_at"),
+            completed_at=body.get("completed_at"),
+            error_message=body.get("error_message"),
+            error_code=body.get("error_code"),
+            credits_charged=body.get("credits_charged"),
+            final_result=final_result,
+            input_question=body.get("input_question"),
+            result_url=body.get("result_url"),
+            status_url=body.get("status_url"),
+            files=files,
+            secret_names=body.get("secret_names"),
+            task=body.get("task"),
+            session_id=body.get("session_id"),
+            session_url=body.get("session_url"),
+            turn=body.get("turn"),
+            llm_key_id=body.get("llm_key_id"),
+            llm_key_masked=body.get("llm_key_masked"),
+            llm_key_source=body.get("llm_key_source"),
+            outcome=body.get("outcome"),
+            outcome_message=body.get("outcome_message"),
+            signals=list(body.get("signals") or []),
+            duration_ms=body.get("duration_ms"),
+            usage=Usage.from_response(raw_usage) if isinstance(raw_usage, dict) else None,
+            llm_cost_usd=_opt_float(result.get("llm_cost_usd")),
+            llm_tier=_opt_str(result.get("llm_tier")),
+            reasoning=_opt_str(result.get("reasoning")),
+            proxy_network=body.get("proxy_network") or None,
+            proxy_bytes=int(body.get("proxy_bytes") or 0),
+            proxy_credits=int(body.get("proxy_credits") or 0),
+            raw=body,
+        )
+
+    @property
+    def is_terminal(self) -> bool:
+        return JobStatus.is_terminal(self.status)
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status == JobStatus.COMPLETED and not self.error_message
+
+    def __str__(self) -> str:
+        return f"Job(id={self.id[:8]}…, status={self.status}, steps={self.step_count}/{self.progress_total})"
+
+
+@dataclass
+class JobFile:
+    """A downloadable output file a task agent wrote (incl. session.gif recording)."""
+    name: str
+    size: int
+    created_at: Optional[str] = None
+
+    @classmethod
+    def from_response(cls, body: dict) -> "JobFile":
+        return cls(name=body.get("name") or "", size=int(body.get("size") or 0),
+                   created_at=body.get("created_at"))
+
+
+@dataclass
+class SessionTurn:
+    """One message in a session and the agent's answer."""
+    job_id: str
+    task: str
+    status: str
+    final_result: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    step_count: int = 0
+    duration_seconds: Optional[float] = None
+    credits_charged: int = 0
+    llm: Optional[str] = None
+    live_url: Optional[str] = None
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "SessionTurn":
+        return cls(
+            job_id=body.get("job_id") or "",
+            task=body.get("task") or "",
+            status=body.get("status") or "",
+            final_result=body.get("final_result"),
+            error_code=body.get("error_code"),
+            error_message=body.get("error_message"),
+            step_count=int(body.get("step_count") or 0),
+            duration_seconds=body.get("duration_seconds"),
+            credits_charged=int(body.get("credits_charged") or 0),
+            llm=body.get("llm"),
+            live_url=body.get("live_url"),
+            created_at=body.get("created_at"),
+            started_at=body.get("started_at"),
+            completed_at=body.get("completed_at"),
+            raw=body,
+        )
+
+    @property
+    def is_terminal(self) -> bool:
+        return JobStatus.is_terminal(self.status)
+
+
+@dataclass
+class SessionBrowser:
+    """The session's browser right now.
+
+    status is "starting", "live" or "closed"; mode is "burner" or
+    "persistent" (an identity), None until known. credits is what the
+    browser cost: 5 for a burner, 1 per identity session.
+    """
+    status: str
+    mode: Optional[str] = None
+    live_url: Optional[str] = None
+    expires_at: Optional[str] = None
+    expires_in_seconds: Optional[int] = None
+    credits: int = 0
+
+    @classmethod
+    def from_response(cls, body: dict) -> "SessionBrowser":
+        return cls(
+            status=body.get("status") or "",
+            mode=body.get("mode"),
+            live_url=body.get("live_url"),
+            expires_at=body.get("expires_at"),
+            expires_in_seconds=body.get("expires_in_seconds"),
+            credits=int(body.get("credits") or 0),
+        )
+
+
+@dataclass
+class Session:
+    """GET /v1/sessions/:id: follow-up messages on the same browser.
+
+    status is "running" (a turn is queued or running), "idle" (it takes a
+    follow-up now) or "closed" (its browser is gone; closed_reason says
+    why: "expired", "stopped", "failed" or "single_task").
+    """
+    id: str
+    status: str
+    accepts_messages: bool
+    title: str = ""
+    closed_reason: Optional[str] = None
+    keep_browser: bool = False
+    agent_id: Optional[str] = None
+    browser: Optional[SessionBrowser] = None
+    credits_charged: int = 0
+    turn_count: int = 0
+    turns: list = field(default_factory=list)
+    created_at: Optional[str] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "Session":
+        return cls(
+            id=body.get("id") or "",
+            status=body.get("status") or "",
+            accepts_messages=bool(body.get("accepts_messages")),
+            title=body.get("title") or "",
+            closed_reason=body.get("closed_reason"),
+            keep_browser=bool(body.get("keep_browser")),
+            agent_id=body.get("agent_id"),
+            browser=SessionBrowser.from_response(body.get("browser") or {}),
+            credits_charged=int(body.get("credits_charged") or 0),
+            turn_count=int(body.get("turn_count") or 0),
+            turns=[SessionTurn.from_response(t) for t in body.get("turns") or []],
+            created_at=body.get("created_at"),
+            raw=body,
+        )
+
+    @property
+    def last_turn(self) -> Optional[SessionTurn]:
+        return self.turns[-1] if self.turns else None
+
+
+@dataclass
+class Schedule:
+    """A recurring scheduled task (GET/POST /v1/schedules)."""
+    id: str
+    interval_seconds: int
+    enabled: bool
+    name: Optional[str] = None
+    task: Optional[str] = None
+    llm: Optional[str] = None
+    next_run_at: Optional[str] = None
+    last_run_at: Optional[str] = None
+    last_job_id: Optional[str] = None
+    run_count: int = 0
+    created_at: Optional[str] = None
+    # Saved LLM key the schedule runs with (the schedule stores no secret).
+    llm_key_id: Optional[str] = None
+    # Reasoning level its runs use; None for the tier's or provider's default.
+    reasoning: Optional[str] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "Schedule":
+        return cls(
+            id=body.get("id") or "",
+            interval_seconds=int(body.get("interval_seconds") or 0),
+            enabled=bool(body.get("enabled")),
+            name=body.get("name"),
+            task=body.get("task"),
+            llm=body.get("llm"),
+            next_run_at=body.get("next_run_at"),
+            last_run_at=body.get("last_run_at"),
+            last_job_id=body.get("last_job_id"),
+            run_count=int(body.get("run_count") or 0),
+            created_at=body.get("created_at"),
+            llm_key_id=body.get("llm_key_id"),
+            reasoning=_opt_str(body.get("reasoning")),
+            raw=body,
+        )
+
+
+@dataclass
+class Webhook:
+    id: str
+    url: str
+    events: list
+    created_at: Optional[str] = None
+    last_sent_at: Optional[str] = None
+    last_error: Optional[str] = None
+    disabled_at: Optional[str] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "Webhook":
+        return cls(
+            id=body.get("id") or "",
+            url=body.get("url") or "",
+            events=list(body.get("events") or []),
+            created_at=body.get("created_at"),
+            last_sent_at=body.get("last_sent_at"),
+            last_error=body.get("last_error"),
+            disabled_at=body.get("disabled_at"),
+            raw=body,
+        )
+
+
+@dataclass
+class LLMKey:
+    """A saved LLM provider key (GET/POST /v1/llm-keys).
+
+    The API never returns the secret: ``masked`` is the known prefix plus
+    the last 4 characters (e.g. ``"sk-ant-…a1b2"``).
+
+    status is ``valid`` | ``invalid`` | ``unchecked``; status_detail is
+    ``ok`` | ``invalid_key`` | ``insufficient_quota`` | ``rate_limited`` |
+    ``provider_unreachable`` | ``unexpected_response`` | ``not_checked``, and
+    status_message is the plain-language text for it.
+    """
+    id: str
+    provider: str
+    masked: str
+    name: str = ""
+    base_url: Optional[str] = None
+    is_default: bool = False
+    status: str = ""
+    status_detail: Optional[str] = None
+    status_message: Optional[str] = None
+    last_validated_at: Optional[str] = None
+    last_used_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "LLMKey":
+        body = body or {}
+        return cls(
+            id=body.get("id") or "",
+            provider=body.get("provider") or "",
+            masked=body.get("masked") or "",
+            name=body.get("name") or "",
+            base_url=body.get("base_url"),
+            is_default=bool(body.get("is_default")),
+            status=body.get("status") or "",
+            status_detail=body.get("status_detail"),
+            status_message=body.get("status_message"),
+            last_validated_at=body.get("last_validated_at"),
+            last_used_at=body.get("last_used_at"),
+            created_at=body.get("created_at"),
+            updated_at=body.get("updated_at"),
+            raw=body,
+        )
+
+
+@dataclass
+class HostedModel:
+    """One hosted tier from GET /v1/models. ``id`` is the value to pass as
+    ``llm`` ("browsa", "browsa-fast", "browsa-smart").
+
+    model is what the tier runs on now and fallback_models what it falls back
+    to, in order; reasoning is the tier's default level (None: the model's
+    own default); credits_per_task is the flat number of credits the tier
+    adds to a task (None if the server did not say). These are server
+    settings and can change.
+    """
+    id: str
+    model: str = ""
+    fallback_models: list = field(default_factory=list)
+    reasoning: Optional[str] = None
+    credits_per_task: Optional[int] = None
+    default: bool = False
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "HostedModel":
+        body = body if isinstance(body, dict) else {}
+        return cls(
+            id=body.get("id") or "",
+            model=body.get("model") or "",
+            fallback_models=list(body.get("fallback_models") or []),
+            reasoning=_opt_str(body.get("reasoning")),
+            credits_per_task=_opt_int(body.get("credits_per_task")),
+            default=bool(body.get("default")),
+            raw=body,
+        )
+
+
+@dataclass
+class OwnKeyModels:
+    """What you can run with your own LLM key: the providers, and the model
+    used for each when ``llm`` is omitted."""
+    providers: list = field(default_factory=list)
+    default_models: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "OwnKeyModels":
+        body = body if isinstance(body, dict) else {}
+        return cls(
+            providers=list(body.get("providers") or []),
+            default_models=dict(body.get("default_models") or {}),
+        )
+
+
+@dataclass
+class Models:
+    """GET /v1/models: the hosted tiers and the own-key providers."""
+    hosted: list = field(default_factory=list)
+    own_key: OwnKeyModels = field(default_factory=OwnKeyModels)
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "Models":
+        body = body if isinstance(body, dict) else {}
+        return cls(
+            hosted=[HostedModel.from_response(h) for h in body.get("hosted") or []],
+            own_key=OwnKeyModels.from_response(body.get("own_key") or {}),
+            raw=body,
+        )
+
+    def tier(self, tier_id: str) -> Optional[HostedModel]:
+        """The hosted tier with this id, or None."""
+        for h in self.hosted:
+            if h.id == tier_id:
+                return h
+        return None
+
+
+# ─── Proxies ─────────────────────────────────────────────────────────────
+# The `proxy` argument of create_task(), create_schedule() and
+# create_agent() takes one of two forms.
+
+
+class ProxyConfig(TypedDict, total=False):
+    """Your own HTTP, HTTPS or SOCKS5 proxy. Give host and port, or server
+    as "host:port" / "scheme://[user:pass@]host:port"."""
+    type: str
+    host: str
+    port: int
+    server: str
+    username: str
+    password: str
+    country: str
+
+
+class _NetworkProxyRequired(TypedDict):
+    network: str
+
+
+class NetworkProxy(_NetworkProxyRequired, total=False):
+    """A tier of Browsa's built-in proxy network, billed per GB from
+    credits: ``{"network": "datacenter"}`` or ``{"network": "residential",
+    "country": "us"}``. country is a lowercase ISO alpha-2 code and may be
+    left out. Nothing else goes next to network (no host, port, server,
+    username, password or type), and no proxy_id with it.
+
+    Available only when ``Client.proxy_network()`` reports ``enabled``; its
+    tiers list the networks, their countries and the price per GB.
+    """
+    country: str
+
+
+Proxy = Union[ProxyConfig, NetworkProxy]
+
+
+@dataclass
+class ProxyNetworkTier:
+    """One tier of the built-in proxy network (GET /v1/proxy-network)."""
+    network: str
+    credits_per_gb: Optional[int] = None
+    mb_per_credit: Optional[int] = None
+    countries: list = field(default_factory=list)
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "ProxyNetworkTier":
+        return cls(
+            network=body.get("network") or "",
+            credits_per_gb=body.get("credits_per_gb"),
+            mb_per_credit=body.get("mb_per_credit"),
+            countries=list(body.get("countries") or []),
+            raw=body,
+        )
+
+
+@dataclass
+class ProxyNetwork:
+    """GET /v1/proxy-network: whether the built-in proxy network is on for
+    this server, and its tiers. enabled is False and tiers is empty when it
+    is off."""
+    enabled: bool = False
+    tiers: list = field(default_factory=list)
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: Any) -> "ProxyNetwork":
+        if not isinstance(body, dict):
+            return cls()
+        return cls(
+            enabled=body.get("enabled") is True,
+            tiers=[ProxyNetworkTier.from_response(t) for t in (body.get("tiers") or []) if isinstance(t, dict)],
+            raw=body,
+        )
+
+    def tier(self, network: str) -> Optional[ProxyNetworkTier]:
+        """The tier with that name, or None when it is not offered."""
+        for t in self.tiers:
+            if t.network == network:
+                return t
+        return None

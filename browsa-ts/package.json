@@ -1,0 +1,64 @@
+{
+  "name": "browsa",
+  "version": "0.3.0",
+  "description": "Official TypeScript SDK for Browsa: real cloud browsers for AI agents (browsa.io)",
+  "license": "MIT",
+  "author": "Browsa <support@browsa.io>",
+  "homepage": "https://browsa.io",
+  "bugs": {
+    "url": "https://github.com/browsa-io/browsa/issues",
+    "email": "support@browsa.io"
+  },
+  "keywords": [
+    "browser-automation",
+    "ai-agents",
+    "browser-use",
+    "real-browser",
+    "scraping",
+    "playwright",
+    "puppeteer"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "browsa": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./webhooks": {
+      "types": "./dist/webhooks.d.ts",
+      "import": "./dist/webhooks.js",
+      "require": "./dist/webhooks.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/webhooks.ts src/cli.ts --format esm,cjs --dts --clean",
+    "test": "node --test test/*.test.mjs",
+    "test:live": "npm run build && node --test test/live.test.mjs",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8",
+    "typescript": "^5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/browsa-io/browsa.git",
+    "directory": "browsa-ts"
+  }
+}

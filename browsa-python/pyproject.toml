@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "browsa"
+dynamic = ["version"]
+description = "Official Python SDK for Browsa: real cloud browsers for AI agents (browsa.io)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "Browsa", email = "support@browsa.io"}]
+keywords = ["browser-automation", "ai-agents", "browser-use", "real-browser", "scraping", "playwright"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []  # zero deps: stdlib only
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-asyncio>=0.21", "ruff>=0.1"]
+
+[project.urls]
+Homepage = "https://browsa.io"
+Documentation = "https://browsa.io/docs"
+Source = "https://github.com/browsa-io/browsa/tree/main/browsa-python"
+Issues = "https://github.com/browsa-io/browsa/issues"
+Changelog = "https://github.com/browsa-io/browsa/releases"
+
+[tool.setuptools.packages.find]
+include = ["browsa*"]
+exclude = ["tests*", "examples*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "browsa._version.__version__"}

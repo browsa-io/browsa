@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.browsa/browsa",
+  "description": "Cloud browsers for AI agents: run web tasks in plain English or drive real Chromium over CDP.",
+  "repository": {
+    "url": "https://github.com/browsa-io/browsa",
+    "source": "github",
+    "subfolder": "browsa-mcp"
+  },
+  "websiteUrl": "https://browsa.io",
+  "version": "0.3.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@browsa/mcp",
+      "version": "0.3.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "BROWSA_API_KEY",
+          "description": "Browsa API key from https://app.browsa.io/dashboard/keys",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "BROWSA_LLM_API_KEY",
+          "description": "Optional. Your own LLM provider key for agent tasks. Without it, tasks run on a Browsa hosted tier.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
