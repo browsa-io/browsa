@@ -902,3 +902,66 @@ def test_async_proxy_network():
         pn = await c.proxy_network()
         assert pn.enabled and pn.tier("residential").credits_per_gb == 50
     asyncio.run(go())
+
+
+# ─── Page view: observe and act ──────────────────────────────────────────
+
+
+def test_observe_and_act_send_the_engine_shape():
+    from browsa import Client
+    c = Client(api_key="agt_live_test")
+    c._t = _RecordingTransport({"text": "page …", "tab": "T1", "session": "pv_a", "ids_reset": True})
+    v = c.observe("agt_1")
+    assert v["text"] == "page …"
+    assert c._t.calls[0] == ("POST", "/v1/agents/agt_1/observe", {})
+    assert c._t.kwargs[0]["timeout"] == 90.0
+
+    c.observe("agt_1", scope="page", budget=4000, expand=12, json=True)
+    assert c._t.calls[1][2] == {"scope": "page", "budget": 4000, "expand": 12, "json": True, "session": "pv_a"}
+
+    c.act("agt_1", "type", id=14, text="10115", clear=True)
+    assert c._t.calls[2] == ("POST", "/v1/agents/agt_1/act",
+                             {"action": "type", "id": 14, "text": "10115", "clear": True, "session": "pv_a"})
+    c.act("agt_1", {"action": "navigate", "url": "https://example.com"})
+    assert c._t.calls[3][2] == {"action": "navigate", "url": "https://example.com", "session": "pv_a"}
+    c.act("agt_1", "wait", for_="text", text="Thank you", timeout=8000)
+    assert c._t.calls[4][2] == {"action": "wait", "for": "text", "text": "Thank you", "timeout": 8000, "session": "pv_a"}
+
+
+def test_page_session_is_remembered_per_browser_and_tab():
+    from browsa import Client
+    c = Client(api_key="agt_live_test")
+    c._t = _RecordingTransport({"text": "", "tab": "T1", "session": "pv_a"})
+    c.observe("agt_1")
+    c._t.reply = {"text": "", "tab": "T2", "session": "pv_b"}
+    c.observe("agt_1", tab="T2")
+    assert "session" not in c._t.calls[1][2]          # nothing seen for T2 yet
+    c.act("agt_1", "click", id=3)                      # no tab: the one used last
+    assert c._t.calls[2][2]["session"] == "pv_b"
+    c._t.reply = {"text": "", "tab": "T1", "session": "pv_a"}
+    c.act("agt_1", "click", id=3, tab="T1")
+    assert c._t.calls[3][2] == {"action": "click", "id": 3, "tab": "T1", "session": "pv_a"}
+    c.act("agt_2", "press", keys="Enter")              # another browser: none
+    assert "session" not in c._t.calls[4][2]
+    c.act("agt_1", "click", id=3, session="")          # opt out
+    assert "session" not in c._t.calls[5][2]
+    c.act("agt_1", "click", id=3, session="pv_mine")
+    assert c._t.calls[6][2]["session"] == "pv_mine"
+
+
+def test_async_observe_and_act():
+    import asyncio
+    from browsa import AsyncClient
+    c = AsyncClient("agt_test_x")
+    c._sync._t = _RecordingTransport({"text": "", "tab": "T1", "session": "pv_a", "status": "ok"})
+
+    async def run():
+        await c.observe("agt_1", scope="page")
+        return await c.act("agt_1", "click", role="button", name="Continue")
+
+    r = asyncio.run(run())
+    assert r["status"] == "ok"
+    assert c._sync._t.calls == [
+        ("POST", "/v1/agents/agt_1/observe", {"scope": "page"}),
+        ("POST", "/v1/agents/agt_1/act", {"action": "click", "role": "button", "name": "Continue", "session": "pv_a"}),
+    ]

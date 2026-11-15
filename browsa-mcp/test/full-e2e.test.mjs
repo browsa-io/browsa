@@ -16,9 +16,9 @@ const SPEND = process.env.BROWSA_LIVE_SPEND === "1";
 const BASE = (process.env.BROWSA_BASE_URL || "https://browsa.io").replace(/\/+$/, "");
 
 const TOOL_NAMES = [
-  "cancel_job", "create_schedule", "create_webhook", "credits", "delete_webhook",
+  "act", "cancel_job", "create_schedule", "create_webhook", "credits", "delete_webhook",
   "get_job", "list_browsers", "list_identities", "list_job_files", "list_llm_keys",
-  "list_models", "list_schedules", "list_webhooks", "proxy_network", "respond_to_job", "run_task", "start_browser",
+  "list_models", "list_schedules", "list_webhooks", "observe", "proxy_network", "respond_to_job", "run_task", "start_browser",
   "stop_browser",
 ];
 

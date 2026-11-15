@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, AsyncIterator, Iterable, Iterator, Optional
+from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Union
 
 from . import errors
 from .types import Job, JobFile, JobStatus, LLMKey, Models, Proxy, ProxyNetwork, Schedule, Session, Webhook
@@ -143,6 +143,10 @@ class Client:
                 "api_key must start with 'agt_'. Mint one at https://app.browsa.io/dashboard/keys"
             )
         self._t = _Transport(api_key, base_url, timeout)
+        # Page view sessions seen by observe()/act(): agent id ->
+        # {"last": tab id, "tabs": {tab id: session}}. Sent back so the
+        # server can tell when element ids are from a view it no longer has.
+        self._page_sessions: dict = {}
 
     # ── Tasks ────────────────────────────────────────────────────────────
 
@@ -988,6 +992,111 @@ class Client:
         The empirical proof behind the trust score number."""
         return self._t.request("GET", f"/v1/agents/{agent_id}/detection-signal")
 
+    # ── Page view: observe and act without CDP ───────────────────────────
+
+    def _page_session(self, agent_id: str, tab: Optional[str], session: Optional[str]) -> Optional[str]:
+        if session is not None:
+            return session or None
+        seen = self._page_sessions.get(agent_id)
+        if not seen:
+            return None
+        return seen["tabs"].get(tab or seen["last"])
+
+    def _remember_page(self, agent_id: str, r: Any) -> Any:
+        if isinstance(r, dict) and r.get("tab") and r.get("session"):
+            seen = self._page_sessions.setdefault(agent_id, {"last": "", "tabs": {}})
+            seen["last"] = r["tab"]
+            seen["tabs"][r["tab"]] = r["session"]
+        return r
+
+    def observe(
+        self,
+        agent_id: str,
+        *,
+        scope: Optional[str] = None,
+        budget: Optional[int] = None,
+        expand: Optional[int] = None,
+        tab: Optional[str] = None,
+        json: bool = False,
+        session: Optional[str] = None,
+    ) -> dict:
+        """POST /v1/agents/:id/observe — the page of a running browser as
+        compact text for a model: one line per element, ``[id] role "name"
+        state``, inside a token budget. Use the ids with act(). Free.
+
+        scope: ``"viewport"`` (default) lists what is in the viewport and
+        counts the rest; ``"page"`` lists the whole page.
+        budget: approximate tokens (characters / 4), default 2000, -1 for none.
+        expand: id of a container, table, list or select to list in full.
+        tab: a tab id from the answer's ``tabs``; default the tab used last.
+        json: also return the view as a structure under ``view``.
+
+        Returns a dict: ``text``, ``state`` (``ok``, ``challenge`` on a
+        full-page bot check, ``dialog`` with a JavaScript dialog open),
+        ``url``, ``title``, ``tabs``, ``session``, ``ids_reset`` and sizes.
+
+        Ids are valid while the server keeps its view session (``session``).
+        ``ids_reset`` true means this call started a new one: ids from
+        earlier answers are not valid. The client sends the last ``session``
+        it saw for you; pass ``session=""`` to send none.
+        """
+        body: dict = {}
+        for k, v in {"scope": scope, "budget": budget, "expand": expand, "tab": tab}.items():
+            if v is not None: body[k] = v
+        if json: body["json"] = True
+        sess = self._page_session(agent_id, tab, session)
+        if sess: body["session"] = sess
+        r = self._t.request("POST", f"/v1/agents/{agent_id}/observe", body=body, timeout=90.0)
+        return self._remember_page(agent_id, r)
+
+    def act(
+        self,
+        agent_id: str,
+        action: Union[str, dict],
+        *,
+        tab: Optional[str] = None,
+        json: bool = False,
+        session: Optional[str] = None,
+        **fields: Any,
+    ) -> dict:
+        """POST /v1/agents/:id/act — one action in a running browser, with
+        real input events; returns what changed instead of the whole page.
+        Free.
+
+        action: ``click``, ``type``, ``press``, ``select``, ``check``,
+        ``uncheck``, ``hover``, ``scroll``, ``navigate``, ``back``,
+        ``forward``, ``reload``, ``wait``, ``upload`` or ``dialog``, with
+        its fields as keyword arguments, or the whole action as a dict::
+
+            c.act(agent_id, "type", id=14, text="10115", clear=True)
+            c.act(agent_id, "click", role="button", name="Continue")
+            c.act(agent_id, {"action": "navigate", "url": "https://example.com"})
+
+        Fields: ``id`` | ``role`` + ``name`` | ``x`` + ``y`` (click);
+        ``text``, ``clear``, ``submit`` (type); ``keys`` (press); ``option``
+        (select); ``dy`` | ``to`` (scroll); ``url`` (navigate); ``ms`` |
+        ``for_`` + ``text`` / ``id``, ``timeout`` (wait, at most 30000 ms);
+        ``files`` (upload); ``accept``, ``text`` (dialog). ``for_`` is sent
+        as ``for``.
+
+        Returns a dict: ``text`` (the diff, how the page settled, a new view
+        after a navigation), ``status``, ``reason``, ``url``, ``session``,
+        ``ids_reset``. ``status`` is ``ok``, ``failed``, ``blocked``,
+        ``challenge`` or ``stale``; none of them raises. ``stale``: the id
+        is from a view the server no longer has; nothing was done and
+        ``text`` carries a new view to pick from.
+        """
+        body: dict = dict(action) if isinstance(action, dict) else {"action": action}
+        for k, v in fields.items():
+            if v is not None: body["for" if k == "for_" else k] = v
+        if tab is not None: body["tab"] = tab
+        if json: body["json"] = True
+        sess = self._page_session(agent_id, body.get("tab"), session if session is not None else body.get("session"))
+        body.pop("session", None)
+        if sess: body["session"] = sess
+        r = self._t.request("POST", f"/v1/agents/{agent_id}/act", body=body, timeout=90.0)
+        return self._remember_page(agent_id, r)
+
     def auto(self, task: str, *, llm: Optional[str] = None,
              llm_api_key: Optional[str] = None, llm_base_url: Optional[str] = None,
              max_steps: Optional[int] = None,
@@ -1340,6 +1449,12 @@ class AsyncClient:
 
     async def detection_signal(self, agent_id: str) -> dict:
         return await asyncio.to_thread(self._sync.detection_signal, agent_id)
+
+    async def observe(self, agent_id: str, **kw: Any) -> dict:
+        return await asyncio.to_thread(self._sync.observe, agent_id, **kw)
+
+    async def act(self, agent_id: str, action: Union[str, dict], **kw: Any) -> dict:
+        return await asyncio.to_thread(self._sync.act, agent_id, action, **kw)
 
     async def connect(self, agent_id: str, **kw: Any) -> dict:
         return await asyncio.to_thread(self._sync.connect, agent_id, **kw)

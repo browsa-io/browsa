@@ -263,6 +263,66 @@ const tools = [
     },
   },
   {
+    name: "observe",
+    description:
+      "Read the page of a browser started with start_browser, as compact text: one line per element, " +
+      "[id] role \"name\" state, inside a token budget. Use the ids with the act tool. No Playwright or CDP " +
+      "needed, and no extra charge. Ids stay valid across observe and act calls until the page loads a new " +
+      "document. On a full-page bot check nothing is read and the first lines say so.",
+    inputSchema: {
+      type: "object",
+      required: ["browser_id"],
+      properties: {
+        browser_id: { type: "string", description: "The id returned by start_browser." },
+        scope: { type: "string", enum: ["viewport", "page"], description: "viewport (default): what is in the viewport, the rest counted. page: the whole page." },
+        budget: { type: "integer", description: "Approximate tokens for the view. Default 2000." },
+        expand: { type: "integer", description: "Id of a container, table, list or select to list in full." },
+        tab: { type: "string", description: "Tab id, from the tabs line of an earlier observe. Default: the tab used last." },
+      },
+    },
+  },
+  {
+    name: "act",
+    description:
+      "Perform one action in a browser started with start_browser and get back what changed (~ changed, " +
+      "+ added, - removed), or a new view after a navigation. Input is sent as real mouse and key events. " +
+      "Name the element by id from observe, or by role and name, or click a point with x and y. The first " +
+      "line of the answer says failed, blocked, challenge or stale when the action did not go through. " +
+      "stale: the ids are from a view that no longer exists, nothing was done, and a new view follows.",
+    inputSchema: {
+      type: "object",
+      required: ["browser_id", "action"],
+      properties: {
+        browser_id: { type: "string", description: "The id returned by start_browser." },
+        action: {
+          type: "string",
+          enum: ["click", "type", "press", "select", "check", "uncheck", "hover", "scroll", "navigate", "back", "forward", "reload", "wait", "upload", "dialog"],
+        },
+        id: { type: "integer", description: "Target element id, from observe." },
+        role: { type: "string", description: "With name: the first element with this role and name, instead of id." },
+        name: { type: "string" },
+        x: { type: "number", description: "click: a viewport point instead of an element (with y)." },
+        y: { type: "number" },
+        text: { type: "string", description: "type: the text. wait for text: the text. dialog: the prompt answer." },
+        clear: { type: "boolean", description: "type: empty the field first." },
+        submit: { type: "boolean", description: "type: press Enter afterwards." },
+        keys: { type: "string", description: "press: Enter, Escape, Control+A, or a sequence such as \"Tab Tab Enter\"." },
+        option: { type: "string", description: "select: option text or value." },
+        double: { type: "boolean", description: "click: double click." },
+        right: { type: "boolean", description: "click: right button." },
+        dy: { type: "integer", description: "scroll: pixels, positive is down." },
+        to: { type: "string", enum: ["top", "bottom"], description: "scroll." },
+        url: { type: "string", description: "navigate." },
+        ms: { type: "integer", description: "wait: a fixed time in milliseconds, at most 30000." },
+        for: { type: "string", enum: ["text", "id-gone", "url-change"], description: "wait: for text to appear, an element to go, or the URL to change." },
+        timeout: { type: "integer", description: "wait: milliseconds, default 10000, at most 30000." },
+        files: { type: "array", items: { type: "string" }, description: "upload: file paths on the browser's machine." },
+        accept: { type: "boolean", description: "dialog: accept (true) or dismiss." },
+        tab: { type: "string", description: "Tab id. Default: the tab used last." },
+      },
+    },
+  },
+  {
     name: "list_browsers",
     description: "List this workspace's browsers (burners and saved identities) with their status.",
     inputSchema: { type: "object", properties: {} },
@@ -528,6 +588,52 @@ async function apiGet(path: string): Promise<any> {
   return body;
 }
 
+// POST a JSON body the same way.
+async function apiPost(path: string, payload: unknown, timeoutMs = 90_000): Promise<any> {
+  const base = (BASE_URL || "https://browsa.io").replace(/\/+$/, "");
+  const resp = await fetch(`${base}${path}`, {
+    method: "POST",
+    headers: {
+      "X-API-Key": API_KEY!, Accept: "application/json", "Content-Type": "application/json",
+      "User-Agent": "browsa-mcp/0.3.0",
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const body: any = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new BrowsaError(body?.error || `HTTP ${resp.status}`, { code: body?.code, requestId: body?.request_id, status: resp.status });
+  }
+  return body;
+}
+
+// View sessions seen by observe and act: browser id -> last tab, and tab ->
+// session. The session goes back with the next call, so the API refuses an
+// id that came from a view it no longer has (see the act tool).
+const pageSessions = new Map<string, { last: string; tabs: Map<string, string> }>();
+
+async function pageCall(route: "observe" | "act", args: Record<string, any>): Promise<string> {
+  const { browser_id, ...body } = args;
+  const seen = pageSessions.get(browser_id);
+  const session = seen ? seen.tabs.get(body.tab ?? seen.last) : undefined;
+  if (session) body.session = session;
+  const r = await apiPost(`/v1/agents/${encodeURIComponent(browser_id)}/${route}`, body);
+  if (r?.tab && r?.session) {
+    const next = seen ?? { last: "", tabs: new Map<string, string>() };
+    next.last = r.tab;
+    next.tabs.set(r.tab, r.session);
+    pageSessions.set(browser_id, next);
+  }
+  let text: string = r?.text ?? "";
+  // More than one tab: say which ids to pass as tab.
+  if (Array.isArray(r?.tabs) && r.tabs.length > 1) {
+    text += "\ntabs: " + r.tabs
+      .map((t: any) => `${t.id} ${JSON.stringify(t.title || t.url || "")}${t.active ? " (this one)" : ""}`)
+      .join(" | ");
+  }
+  return text;
+}
+
 // GET /v1/models as the API sends it: models and credit numbers are server
 // settings, so nothing here is hardcoded.
 async function listModels() {
@@ -650,6 +756,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "stop_browser":
         await client.destroyAgent(args.browser_id);
         return ok({ stopped: args.browser_id });
+      case "observe":
+        return ok(await pageCall("observe", args));
+      case "act":
+        return ok(await pageCall("act", args));
       case "list_browsers":
         return ok(await client.listIdentities());
       case "credits":

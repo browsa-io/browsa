@@ -633,3 +633,41 @@ test("a job carries its proxy network usage; without one the fields are null and
     assert.deepEqual([j.proxyNetwork, j.proxyBytes, j.proxyCredits], [null, 0, 0]);
   }
 });
+
+// ── Page view: observe and act ─────────────────────────────────────────
+
+test("observe and act send the engine's shape and return the answer as is", async () => {
+  const { c, calls } = recordingClient({ text: "page …", state: "ok", status: "ok", tab: "T1", session: "pv_a", ids_reset: true });
+  const v = await c.observe("agt_1");
+  assert.equal(v.text, "page …");
+  assert.equal(v.ids_reset, true);
+  assert.deepEqual(calls[0], { method: "POST", path: "/v1/agents/agt_1/observe", body: {} });
+  await c.observe("agt_1", { scope: "page", budget: 4000, expand: 12, json: true });
+  assert.deepEqual(calls[1].body, { scope: "page", budget: 4000, expand: 12, json: true, session: "pv_a" });
+  const r = await c.act("agt_1", { action: "type", id: 14, text: "10115", clear: true });
+  assert.equal(r.status, "ok");
+  assert.deepEqual(calls[2], { method: "POST", path: "/v1/agents/agt_1/act",
+    body: { action: "type", id: 14, text: "10115", clear: true, session: "pv_a" } });
+  await c.act("agt_1", { action: "wait", for: "text", text: "Thank you", timeout: 8000 });
+  assert.deepEqual(calls[3].body, { action: "wait", for: "text", text: "Thank you", timeout: 8000, session: "pv_a" });
+});
+
+test("the view session is remembered per browser and tab", async () => {
+  let reply = { text: "", tab: "T1", session: "pv_a" };
+  const { c, calls } = recordingClient(() => reply);
+  await c.observe("agt_1");
+  reply = { text: "", tab: "T2", session: "pv_b" };
+  await c.observe("agt_1", { tab: "T2" });
+  assert.equal("session" in calls[1].body, false);                  // nothing seen for T2 yet
+  await c.act("agt_1", { action: "click", id: 3 });                 // no tab: the one used last
+  assert.equal(calls[2].body.session, "pv_b");
+  reply = { text: "", tab: "T1", session: "pv_a" };
+  await c.act("agt_1", { action: "click", id: 3, tab: "T1" });
+  assert.deepEqual(calls[3].body, { action: "click", id: 3, tab: "T1", session: "pv_a" });
+  await c.act("agt_2", { action: "press", keys: "Enter" });         // another browser: none
+  assert.equal("session" in calls[4].body, false);
+  await c.act("agt_1", { action: "click", id: 3, session: "" });    // opt out
+  assert.equal("session" in calls[5].body, false);
+  await c.act("agt_1", { action: "click", id: 3, session: "pv_mine" });
+  assert.equal(calls[6].body.session, "pv_mine");
+});

@@ -112,6 +112,8 @@ When the job has them, `run_task` and `get_job` results include `usage` (`input_
 | `respond_to_job` | Answer an `input_required` prompt (CAPTCHA, decision). |
 | `start_browser` | Start a real cloud browser and get its CDP URL, to drive yourself with Playwright or Puppeteer. |
 | `stop_browser` | Stop a browser from `start_browser` and release it. |
+| `observe` | Read the page of a browser from `start_browser` as compact text with element ids. No Playwright needed. |
+| `act` | One action in that browser (click, type, press, select, scroll, navigate, wait and more); returns what changed. |
 | `list_browsers` | List this workspace's browsers and their status. |
 | `credits` | Show credit balance + top-up packs. |
 | `list_webhooks` / `create_webhook` / `delete_webhook` | Webhook CRUD. |

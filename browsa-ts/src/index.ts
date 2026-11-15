@@ -842,11 +842,135 @@ function throwForStatus(status: number, body: ErrorEnvelope, retryAfter?: number
   throw new APIError(msg, { code, requestId, status, body });
 }
 
+// ── Page view: observe and act without CDP ─────────────────────────────
+
+/** Options of observe(). */
+export interface ObserveOptions {
+  /** "viewport" (default) lists what is in the viewport and counts the rest; "page" lists the whole page. */
+  scope?: "viewport" | "page";
+  /** Approximate tokens (characters / 4). Default 2000; -1 for none. */
+  budget?: number;
+  /** Id of a container, table, list or select to list in full. */
+  expand?: number;
+  /** A tab id from `tabs`. Default: the tab used last. */
+  tab?: string;
+  /** Also return the view as a structure under `view`. */
+  json?: boolean;
+  /** The view session to check against. Default: the last one this client saw; "" sends none. */
+  session?: string;
+}
+
+/** A tab of the browser, as observe() lists it. */
+export interface PageTab {
+  id: string;
+  url?: string;
+  title?: string;
+  /** The tab the answer is about. */
+  active: boolean;
+}
+
+/** What observe() returns. Keys are the API's own (snake_case). */
+export interface PageView {
+  /** The view for a model: one element per line, `[id] role "name"  state`. */
+  text: string;
+  /** "challenge": a full-page bot check, nothing is read. "dialog": a JavaScript dialog is open. */
+  state: "ok" | "challenge" | "dialog";
+  url: string;
+  title: string;
+  scope?: string;
+  scroll_y?: number;
+  page_h?: number;
+  viewport_w?: number;
+  viewport_h?: number;
+  /** Approximate size of `text` (characters / 4). */
+  tokens?: number;
+  total?: number;
+  total_interactive?: number;
+  degraded?: number;
+  truncated?: boolean;
+  loading?: boolean;
+  dialog?: Record<string, any>;
+  challenge?: Record<string, any>;
+  tab: string;
+  tabs?: PageTab[];
+  /** The view session. Ids are valid while it stays the same. */
+  session: string;
+  /** True when this call started a new view session: ids from earlier answers are not valid. */
+  ids_reset: boolean;
+  /** With `json: true`: the view as a structure. */
+  view?: Record<string, any>;
+}
+
+/** One action for act(): the engine's action object. */
+export interface PageAction {
+  action:
+    | "click" | "type" | "press" | "select" | "check" | "uncheck" | "hover" | "scroll"
+    | "navigate" | "back" | "forward" | "reload" | "wait" | "upload" | "dialog";
+  /** Target element, from a view. Or `role` + `name`, or `x` + `y` for a click. */
+  id?: number;
+  role?: string;
+  name?: string;
+  x?: number;
+  y?: number;
+  /** type: the text. wait for text: the text. dialog: the prompt answer. */
+  text?: string;
+  clear?: boolean;
+  submit?: boolean;
+  /** press: "Enter", "Control+A", "Tab Tab Enter". */
+  keys?: string;
+  /** select: option text or value. */
+  option?: string;
+  double?: boolean;
+  right?: boolean;
+  modifiers?: Array<"Control" | "Shift" | "Alt" | "Meta">;
+  /** scroll: pixels, positive is down. */
+  dy?: number;
+  to?: "top" | "bottom";
+  url?: string;
+  /** wait: a fixed time, at most 30000. */
+  ms?: number;
+  for?: "text" | "id-gone" | "url-change";
+  /** wait: milliseconds, default 10000, at most 30000. */
+  timeout?: number;
+  /** upload: paths on the browser's machine. */
+  files?: string[];
+  /** dialog: accept (true) or dismiss. */
+  accept?: boolean;
+  tab?: string;
+  json?: boolean;
+  session?: string;
+}
+
+/** What act() returns. Keys are the API's own (snake_case). */
+export interface ActResult {
+  /** What happened, for a model: the changes, how the page settled, a new view after a navigation. */
+  text: string;
+  /** "stale": the id is from a view the server no longer has; nothing was done, `text` carries a new view. */
+  status: "ok" | "failed" | "blocked" | "challenge" | "stale";
+  reason?: string;
+  action: string;
+  url?: string;
+  navigation?: { url: string; same_document: boolean };
+  fresh_view?: string;
+  settle?: Record<string, any>;
+  new_tabs?: string[];
+  downloads?: string[];
+  dialog?: Record<string, any>;
+  challenge?: Record<string, any>;
+  tab: string;
+  session: string;
+  ids_reset: boolean;
+  /** With `json: true`: the result as a structure. */
+  result?: Record<string, any>;
+}
+
 export class Client {
   private apiKey: string;
   private baseUrl: string;
   private timeoutMs: number;
   private fetchImpl: typeof globalThis.fetch;
+  /** View sessions seen by observe()/act(): agent id -> last tab and tab -> session. */
+  private pageSessions = new Map<string, { last: string; tabs: Map<string, string> }>();
 
   constructor(opts: ClientOptions) {
     if (!opts.apiKey || !opts.apiKey.startsWith("agt_")) {
@@ -1488,6 +1612,67 @@ export class Client {
    */
   async detectionSignal(agentId: string): Promise<Record<string, any>> {
     return this.request("GET", `/v1/agents/${encodeURIComponent(agentId)}/detection-signal`);
+  }
+
+  // ── Page view: observe and act without CDP ─────────────────────────────
+
+  private pageSession(agentId: string, tab: string | undefined, session: string | undefined): string | undefined {
+    if (session !== undefined) return session || undefined;
+    const seen = this.pageSessions.get(agentId);
+    return seen ? seen.tabs.get(tab ?? seen.last) : undefined;
+  }
+
+  private rememberPage<T extends { tab?: string; session?: string }>(agentId: string, r: T): T {
+    if (r && r.tab && r.session) {
+      const seen = this.pageSessions.get(agentId) ?? { last: "", tabs: new Map<string, string>() };
+      seen.last = r.tab;
+      seen.tabs.set(r.tab, r.session);
+      this.pageSessions.set(agentId, seen);
+    }
+    return r;
+  }
+
+  /**
+   * POST /v1/agents/{id}/observe: the page of a running browser as compact
+   * text for a model, one line per element (`[id] role "name"  state`),
+   * inside a token budget. Use the ids with act(). Free.
+   *
+   * Ids are valid while the server keeps its view session (`session`).
+   * `ids_reset: true` means this call started a new one: ids from earlier
+   * answers are not valid. The client sends the last `session` it saw.
+   */
+  async observe(agentId: string, opts: ObserveOptions = {}): Promise<PageView> {
+    const { session, ...rest } = opts;
+    const body: Record<string, unknown> = { ...rest };
+    const sess = this.pageSession(agentId, opts.tab, session);
+    if (sess) body.session = sess;
+    const r = await this.request<PageView>("POST", `/v1/agents/${encodeURIComponent(agentId)}/observe`, {
+      body, timeoutMs: 90_000,
+    });
+    return this.rememberPage(agentId, r);
+  }
+
+  /**
+   * POST /v1/agents/{id}/act: one action in a running browser, with real
+   * input events; returns what changed instead of the whole page. Free.
+   *
+   *   await c.act(id, { action: "type", id: 14, text: "10115", clear: true });
+   *   await c.act(id, { action: "click", role: "button", name: "Continue" });
+   *   await c.act(id, { action: "navigate", url: "https://example.com" });
+   *
+   * `status` is "ok", "failed", "blocked", "challenge" or "stale"; none of
+   * them throws. "stale": the id is from a view the server no longer has;
+   * nothing was done and `text` carries a new view to pick from.
+   */
+  async act(agentId: string, action: PageAction): Promise<ActResult> {
+    const { session, ...rest } = action;
+    const body: Record<string, unknown> = { ...rest };
+    const sess = this.pageSession(agentId, action.tab, session);
+    if (sess) body.session = sess;
+    const r = await this.request<ActResult>("POST", `/v1/agents/${encodeURIComponent(agentId)}/act`, {
+      body, timeoutMs: 90_000,
+    });
+    return this.rememberPage(agentId, r);
   }
 
   /**

@@ -212,6 +212,22 @@ job = c.run_task(
 )
 ```
 
+### Observe and act (no Playwright)
+
+Read a running browser's page as compact text with element ids, then act on the ids. Each `act` returns what changed, not the whole page.
+
+```python
+b = c.create_agent(ttl="10m")
+c.act(b["id"], "navigate", url="https://example.com/login")
+view = c.observe(b["id"])
+print(view["text"])                        # [3] textbox "Email"  empty …
+r = c.act(b["id"], "type", id=3, text="ada@example.com")
+print(r["status"], r["text"])              # ok  ~ [3] textbox "Email"  value "ada@example.com"
+c.act(b["id"], "click", role="button", name="Sign in")
+```
+
+`status` is `ok`, `failed`, `blocked`, `challenge` or `stale`; none of them raises. `stale` means the ids came from a view the server no longer has (`ids_reset` is true): nothing was done and `text` carries a new view. Both calls are free. Format and actions: <https://browsa.io/docs#agents-observe>.
+
 ## Docs
 
 - API reference: <https://browsa.io/docs>

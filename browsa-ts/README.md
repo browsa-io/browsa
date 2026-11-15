@@ -195,6 +195,22 @@ await c.runTask({
 });
 ```
 
+### Observe and act (no Playwright)
+
+Read a running browser's page as compact text with element ids, then act on the ids. Each `act` returns what changed, not the whole page.
+
+```ts
+const b = await c.createAgent({ ttl: "10m" });
+await c.act(b.id, { action: "navigate", url: "https://example.com/login" });
+const view = await c.observe(b.id);
+console.log(view.text);                    // [3] textbox "Email"  empty …
+const r = await c.act(b.id, { action: "type", id: 3, text: "ada@example.com" });
+console.log(r.status, r.text);             // ok  ~ [3] textbox "Email"  value "ada@example.com"
+await c.act(b.id, { action: "click", role: "button", name: "Sign in" });
+```
+
+`status` is `ok`, `failed`, `blocked`, `challenge` or `stale`; none of them throws. `stale` means the ids came from a view the server no longer has (`ids_reset` is true): nothing was done and `text` carries a new view. Both calls are free. Format and actions: <https://browsa.io/docs#agents-observe>.
+
 ## Docs
 
 - API reference: <https://browsa.io/docs>

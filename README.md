@@ -2,11 +2,15 @@
 
 Official clients for [Browsa](https://browsa.io), cloud browsers for AI agents. Each browser is Phantom, Browsa's own Chromium build.
 
-| Package | Install | Folder |
-|---|---|---|
-| Python SDK | `pip install browsa` | [`browsa-python`](browsa-python) |
-| TypeScript SDK | `npm i browsa` | [`browsa-ts`](browsa-ts) |
-| MCP server for Claude, Cursor and other MCP clients | `npx -y @browsa/mcp` | [`browsa-mcp`](browsa-mcp) |
+[![PyPI](https://img.shields.io/pypi/v/browsa?label=PyPI%20browsa)](https://pypi.org/project/browsa/)
+[![npm browsa](https://img.shields.io/npm/v/browsa?label=npm%20browsa)](https://www.npmjs.com/package/browsa)
+[![npm @browsa/mcp](https://img.shields.io/npm/v/@browsa/mcp?label=npm%20%40browsa%2Fmcp)](https://www.npmjs.com/package/@browsa/mcp)
+
+| Package | Install | Published at | Source |
+|---|---|---|---|
+| Python SDK | `pip install browsa` | [PyPI: browsa](https://pypi.org/project/browsa/) | [`browsa-python`](browsa-python) |
+| TypeScript SDK | `npm i browsa` | [npm: browsa](https://www.npmjs.com/package/browsa) | [`browsa-ts`](browsa-ts) |
+| MCP server for Claude, Cursor and other MCP clients | `npx -y @browsa/mcp` | [npm: @browsa/mcp](https://www.npmjs.com/package/@browsa/mcp) | [`browsa-mcp`](browsa-mcp) |
 
 ## What you can do
 
