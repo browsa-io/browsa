@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-browsa",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "n8n node for Browsa: run plain-language browser tasks, scrape, extract, screenshot and crawl pages in Phantom cloud browsers",
 	"license": "MIT",
 	"homepage": "https://browsa.io",

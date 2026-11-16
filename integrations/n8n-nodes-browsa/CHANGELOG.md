@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.1 (2026-11-16)
+
+- The npm package no longer includes the TypeScript build cache (`tsconfig.tsbuildinfo`, 95 kB). No change to the node.
+- First release published through npm's trusted publisher (GitHub Actions, OIDC) instead of a token.
+
+## 0.1.0 (2026-11-16)
 
 First version.
 
