@@ -190,7 +190,7 @@ while not job.is_terminal:
 Start a task with `create_session` and the browser stays up after it ends (15 minutes by default, `browser_ttl_seconds` up to 3600), so you can send follow-ups that continue on the same page. A follow-up pays no new browser, only the task's base and step credits.
 
 ```python
-s = c.create_session("Go to example.com and return the H1.", llm="browsa")
+s = c.create_session("Go to example.com and return the page title.", llm="browsa")
 first = c.wait_for_job(s.id)
 print(first.final_result)
 

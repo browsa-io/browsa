@@ -58,19 +58,24 @@ const DEFAULT_LLM_KEY_ID = process.env.BROWSA_LLM_KEY_ID || undefined;
 const DEFAULT_COUNTRY = process.env.BROWSA_COUNTRY;
 const LLM_KEYS_URL = "https://app.browsa.io/dashboard/llm-keys";
 
+const NO_KEY_MESSAGE =
+  "BROWSA_API_KEY is not set. Add it to this MCP server's env (mint one at " +
+  "https://app.browsa.io/dashboard/keys), then restart the server.";
+
+// Without a key the server still starts and lists its tools, so MCP clients and
+// directories can introspect it; every tool call then answers NO_KEY_MESSAGE.
 if (!API_KEY) {
-  console.error("[browsa-mcp] BROWSA_API_KEY env var is required");
+  console.error("[browsa-mcp] BROWSA_API_KEY is not set: tools are listed, but every call will fail until it is.");
   console.error("           Mint one at https://app.browsa.io/dashboard/keys");
-  process.exit(2);
 }
 
-const client = new Client({
-  apiKey: API_KEY,
-  ...(BASE_URL ? { baseUrl: BASE_URL } : {}),
-});
+// Only read inside tool calls, which return NO_KEY_MESSAGE first when there is no key.
+const client = (API_KEY
+  ? new Client({ apiKey: API_KEY, ...(BASE_URL ? { baseUrl: BASE_URL } : {}) })
+  : null) as Client;
 
 const server = new Server(
-  { name: "browsa", version: "0.3.1" },
+  { name: "browsa", version: "0.3.2" },
   { capabilities: { tools: {} } },
 );
 
@@ -552,7 +557,7 @@ function llmKeyError(e: InstanceType<typeof BrowsaError>, choice: LlmChoice) {
 async function proxyNetwork() {
   const base = (BASE_URL || "https://browsa.io").replace(/\/+$/, "");
   const resp = await fetch(`${base}/v1/proxy-network`, {
-    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.1" },
+    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.2" },
   });
   const body: any = await resp.json().catch(() => ({}));
   if (resp.status === 404) return { enabled: false, tiers: [] };
@@ -581,7 +586,7 @@ function proxyUsage(raw: any): Record<string, unknown> {
 async function apiGet(path: string): Promise<any> {
   const base = (BASE_URL || "https://browsa.io").replace(/\/+$/, "");
   const resp = await fetch(`${base}${path}`, {
-    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.1" },
+    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.2" },
   });
   const body: any = await resp.json().catch(() => ({}));
   if (!resp.ok) {
@@ -597,7 +602,7 @@ async function apiPost(path: string, payload: unknown, timeoutMs = 90_000): Prom
     method: "POST",
     headers: {
       "X-API-Key": API_KEY!, Accept: "application/json", "Content-Type": "application/json",
-      "User-Agent": "browsa-mcp/0.3.1",
+      "User-Agent": "browsa-mcp/0.3.2",
     },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(timeoutMs),
@@ -681,6 +686,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const name = req.params.name;
   const args = (req.params.arguments ?? {}) as Record<string, any>;
   let choice: LlmChoice | null = null;
+
+  if (!API_KEY) {
+    return { content: [{ type: "text", text: NO_KEY_MESSAGE }], isError: true };
+  }
 
   try {
     switch (name) {

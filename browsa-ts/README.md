@@ -174,7 +174,7 @@ while (!["completed", "failed", "cancelled"].includes(job.status)) {
 Start a task with `createSession` and the browser stays up after it ends (15 minutes by default, `browserTtlSeconds` up to 3600), so you can send follow-ups that continue on the same page. A follow-up pays no new browser, only the task's base and step credits.
 
 ```ts
-const s = await c.createSession({ task: "Go to example.com and return the H1.", llm: "browsa" });
+const s = await c.createSession({ task: "Go to example.com and return the page title.", llm: "browsa" });
 const first = await c.waitForJob(s.id);
 console.log(first.finalResult);
 

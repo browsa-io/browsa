@@ -1,6 +1,6 @@
 {
   "name": "@browsa/mcp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "mcpName": "io.browsa/browsa",
   "description": "MCP server for Browsa: drive real cloud browsers from Claude Desktop, Cursor, Cline, and any MCP-compatible client",
   "license": "MIT",

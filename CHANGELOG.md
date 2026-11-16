@@ -2,7 +2,13 @@
 
 Covers the three packages: npm `browsa`, npm `@browsa/mcp` and PyPI `browsa`. They share a version number.
 
-## 0.3.1 (not published yet)
+## 0.3.2 (`@browsa/mcp` only)
+
+### Fixed
+
+- **MCP, no key set:** the server starts and lists its tools when `BROWSA_API_KEY` is missing, and each tool call answers that the key is not set. 0.3.1 exited at once, so MCP directories such as Glama could not read its tools. With a key, nothing changes.
+
+## 0.3.1 (2026-11-16)
 
 Found by installing the published 0.3.0 packages in clean containers and running them against production.
 
