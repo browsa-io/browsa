@@ -111,7 +111,7 @@ When the job has them, `run_task` and `get_job` results include `usage` (`input_
 | `run_task` | Run a browser-driven task. Returns the final result, `outcome` and steps. Optional `llm`, `reasoning`, `llm_key_id`. |
 | `get_job` | Poll a long-running task. Optional server-side `wait_seconds`. |
 | `cancel_job` | Cancel a running task. |
-| `respond_to_job` | Answer an `input_required` prompt (CAPTCHA, decision). |
+| `respond_to_job` | Answer an `input_required` prompt (a decision, or a CAPTCHA the task could not solve itself: see https://browsa.io/captcha). |
 | `start_browser` | Start a real cloud browser and get its CDP URL, to drive yourself with Playwright or Puppeteer. |
 | `stop_browser` | Stop a browser from `start_browser` and release it. |
 | `proxy_network` | Whether Browsa's built-in proxy network is on, its tiers, countries and price. Read-only and free. |

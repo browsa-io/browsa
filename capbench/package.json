@@ -1,0 +1,9 @@
+{
+  "name": "browsa-capbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Runs public captcha test pages against any CDP browser and counts what the site's server accepted.",
+  "license": "MIT",
+  "scripts": { "start": "node capbench.js" },
+  "dependencies": { "playwright-core": "^1.50.0" }
+}

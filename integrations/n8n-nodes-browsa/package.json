@@ -1,0 +1,61 @@
+{
+	"name": "n8n-nodes-browsa",
+	"version": "0.1.0",
+	"description": "n8n node for Browsa: run plain-language browser tasks, scrape, extract, screenshot and crawl pages in Phantom cloud browsers",
+	"license": "MIT",
+	"homepage": "https://browsa.io",
+	"keywords": [
+		"n8n-community-node-package",
+		"n8n",
+		"browsa",
+		"browser-automation",
+		"web-scraping",
+		"ai-agents"
+	],
+	"author": {
+		"name": "Browsa",
+		"email": "support@browsa.io"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/browsa-io/browsa.git",
+		"directory": "integrations/n8n-nodes-browsa"
+	},
+	"bugs": {
+		"url": "https://github.com/browsa-io/browsa/issues",
+		"email": "support@browsa.io"
+	},
+	"scripts": {
+		"build": "n8n-node build",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"test": "n8n-node build && node --test test/*.test.js",
+		"release": "n8n-node release",
+		"prepublishOnly": "n8n-node prerelease"
+	},
+	"files": [
+		"dist"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": true,
+		"credentials": [
+			"dist/credentials/BrowsaApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/Browsa/Browsa.node.js"
+		]
+	},
+	"devDependencies": {
+		"@n8n/node-cli": "^0.56.4",
+		"eslint": "9.32.0",
+		"prettier": "3.6.2",
+		"release-it": "^21.1.0",
+		"typescript": "5.9.2"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	}
+}

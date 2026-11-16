@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "crewai-browsa"
+dynamic = ["version"]
+description = "CrewAI tools for Browsa: give your crew a Phantom cloud browser to run tasks, scrape, extract and screenshot pages (browsa.io)"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Browsa", email = "support@browsa.io" }]
+maintainers = [{ name = "Browsa", email = "support@browsa.io" }]
+keywords = [
+    "crewai",
+    "crewai-tools",
+    "browsa",
+    "browser-automation",
+    "ai-agents",
+    "cloud-browser",
+    "scraping",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "browsa>=0.3.1",
+    "crewai>=1.15",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://browsa.io"
+Documentation = "https://browsa.io/docs"
+Repository = "https://github.com/browsa-io/browsa"
+Issues = "https://github.com/browsa-io/browsa/issues"
+
+[tool.hatch.version]
+path = "src/crewai_browsa/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/crewai_browsa"]
+
+[tool.hatch.build.targets.sdist]
+# Ship this folder only. The local .gitignore is the one hatch copies into
+# the sdist (it takes the nearest one), so keep it in this folder.
+only-include = ["src/crewai_browsa", "tests", "examples", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

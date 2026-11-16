@@ -1,0 +1,45 @@
+# Lint, build and test n8n-nodes-browsa.
+# Copy to .github/workflows/ci-n8n.yml at the root of github.com/browsa-io/browsa
+# (GitHub only runs workflows from the repository root).
+name: CI n8n-nodes-browsa
+
+on:
+  pull_request:
+    paths:
+      - 'integrations/n8n-nodes-browsa/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'integrations/n8n-nodes-browsa/**'
+
+concurrency:
+  group: ci-n8n-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: integrations/n8n-nodes-browsa
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: integrations/n8n-nodes-browsa/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build and test
+        run: npm test
