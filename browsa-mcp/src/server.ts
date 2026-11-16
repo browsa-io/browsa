@@ -161,8 +161,8 @@ const tools = [
       "Fetch the current state of a previously-submitted job by UUID. Returns " +
       "status (queued|running|completed|failed|input_required; a cancelled job is failed with " +
       "error_code CANCELLED), step " +
-      "count, final_result text if terminal, and the live_url for the noVNC " +
-      "stream. Cheap — call repeatedly to poll a long-running job started by run_task.",
+      "count, final_result text if terminal, and the live_url of the browser's live " +
+      "view while it runs. Cheap — call repeatedly to poll a long-running job started by run_task.",
     inputSchema: {
       type: "object",
       required: ["job_id"],
