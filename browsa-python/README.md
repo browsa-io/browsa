@@ -174,7 +174,7 @@ job = c.run_task(
 
 ### Interactive (input_required) tasks
 
-If your task can pause for human input (captcha, decision point), watch for status `input_required` and respond. Hosted tasks solve reCAPTCHA v2 image grids of the 3 x 3 kind in the browser's own session on workspaces that have bought a pack (fair use applies); the types and measured pass rates are at https://browsa.io/captcha. A type that is not supported yet, or a workspace on free credits only, may still need you here. Respond like this:
+If your task can pause for human input (captcha, decision point), watch for status `input_required` and respond. Hosted tasks solve reCAPTCHA v2 image grids of the 3 x 3 kind and image-text captchas in the browser's own session on workspaces that have bought a pack (fair use applies); the types and measured pass rates are at https://browsa.io/captcha. A type that is not supported yet, or a workspace on free credits only, may still need you here. Respond like this:
 
 ```python
 job = c.create_task(task="...", llm="...", llm_api_key="...")

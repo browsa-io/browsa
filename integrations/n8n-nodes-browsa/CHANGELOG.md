@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.1.1 (2026-11-16)
+## 0.1.2 (2026-11-16)
+
+- Fixes 0.1.1, which was published without the compiled node (only the icons). Do not use 0.1.1.
+- Builds are no longer incremental, so no TypeScript build cache is created or packaged.
+- The publish workflow now refuses to publish a package that lacks the compiled node or credential.
+
+## 0.1.1 (2026-11-16, broken: do not use)
 
 - The npm package no longer includes the TypeScript build cache (`tsconfig.tsbuildinfo`, 95 kB). No change to the node.
 - First release published through npm's trusted publisher (GitHub Actions, OIDC) instead of a token.

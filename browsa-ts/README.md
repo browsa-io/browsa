@@ -71,7 +71,7 @@ CLI: `browsa llm-keys` lists saved keys; `browsa run "<task>" --llm-key-id <id>`
 
 ## Models
 
-A task runs on one of Browsa's hosted tiers, or on any provider model with your own key. reCAPTCHA v2 image grids of the 3 x 3 kind met during a task are solved in the browser's own session on workspaces that have bought a pack; other kinds are listed at https://browsa.io/captcha.
+A task runs on one of Browsa's hosted tiers, or on any provider model with your own key. reCAPTCHA v2 image grids of the 3 x 3 kind and image-text captchas met during a task are solved in the browser's own session on workspaces that have bought a pack; other kinds are listed at https://browsa.io/captcha.
 
 | `llm` | What it is |
 |---|---|

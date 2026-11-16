@@ -72,6 +72,23 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Check the package contents
+        # 0.1.1 shipped without the compiled node: a second build after a clean
+        # emitted nothing. Build twice, as the release does, and refuse to go on
+        # unless the packed tarball holds the compiled node and credential.
+        run: |
+          npm run build
+          npm run build
+          npm pack --dry-run --json > pack.json
+          node -e '
+            const files = require("./pack.json")[0].files.map((f) => f.path);
+            const need = ["dist/nodes/Browsa/Browsa.node.js", "dist/credentials/BrowsaApi.credentials.js", "dist/nodes/Browsa/GenericFunctions.js"];
+            const missing = need.filter((f) => !files.includes(f));
+            if (missing.length) { console.error("Missing from the package:", missing); process.exit(1); }
+            console.log("Package holds", files.length, "files, including the compiled node and credential.");
+          '
+          rm pack.json
+
       - name: Release
         # In GitHub Actions, `n8n-node release` runs lint and build, then
         # `npm publish` with NPM_CONFIG_PROVENANCE=true.
