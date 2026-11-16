@@ -20,6 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
     "Topic :: Internet :: WWW/HTTP :: Browsers",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
@@ -38,6 +39,9 @@ Changelog = "https://github.com/browsa-io/browsa/releases"
 [tool.setuptools.packages.find]
 include = ["browsa*"]
 exclude = ["tests*", "examples*"]
+
+[tool.setuptools.package-data]
+browsa = ["py.typed"]
 
 [tool.setuptools.dynamic]
 version = {attr = "browsa._version.__version__"}

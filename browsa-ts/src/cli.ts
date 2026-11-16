@@ -223,7 +223,9 @@ async function main() {
         const llm = (args.flags.llm as string) || process.env.BROWSA_LLM || (llmKey ? "claude-opus-5-5" : undefined);
         // Sent as given; the API answers 400 for anything but low, medium or high.
         const reasoning = typeof args.flags.reasoning === "string" ? (args.flags.reasoning as Reasoning) : undefined;
-        const via = llmKey ? "per-task key" : llmKeyId ? `saved key ${llmKeyId}` : "workspace default key";
+        const hosted = llm === "browsa" || (llm ?? "").startsWith("browsa-");
+        const via = hosted ? "hosted model, no key" : llmKey ? "per-task key" : llmKeyId ? `saved key ${llmKeyId}` : "workspace default key";
+        let liveShown = false;
         process.stderr.write(`submitting task… (llm=${llm ?? "default"}, ${via}${reasoning ? `, reasoning=${reasoning}` : ""})\n`);
         const job = await c.runTask({
           task,
@@ -237,13 +239,17 @@ async function main() {
           ja3Profile: (args.flags.ja3 as string) || undefined,
           profileId: (args.flags["profile-id"] as string) || undefined,
           onProgress: (j) => {
-            if (!json) process.stderr.write(`  step ${j.stepCount}/${j.progressTotal} · ${j.status}\r`);
+            if (json) return;
+            // The live link exists only while the browser runs, so show it once, early.
+            if (!liveShown && j.liveUrl) { liveShown = true; process.stderr.write(`watch live: ${j.liveUrl}\n`); }
+            process.stderr.write(`  step ${j.stepCount}/${j.progressTotal} · ${j.status}\r`);
           },
         });
         if (!json) process.stderr.write("\n");
         if (json) return out(job, true);
         console.log(`\n=== ${job.status} · ${job.stepCount}/${job.progressTotal} · credits_charged=${job.creditsCharged ?? "?"} ===`);
-        console.log(`live: ${job.liveUrl}`);
+        if (job.outcome && job.outcome !== job.status) console.log(`outcome: ${job.outcome}${job.outcomeMessage ? " · " + job.outcomeMessage : ""}`);
+        if (job.liveUrl) console.log(`live: ${job.liveUrl}`);
         const llmLine = llmSummary(job);
         if (llmLine) console.log(llmLine);
         if (job.finalResult) console.log("\n--- result ---\n" + job.finalResult);

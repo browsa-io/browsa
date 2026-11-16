@@ -11,7 +11,9 @@ this stays pure-stdlib until then.
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -114,6 +116,16 @@ class _Transport:
                 )
             raise errors.from_response(e.code, err_body)
         except urllib.error.URLError as e:
+            # A connect timeout arrives wrapped in URLError.
+            if isinstance(e.reason, (socket.timeout, TimeoutError)):
+                raise errors.TimeoutError(f"request timed out after {eff_timeout}s") from e
+            raise errors.BrowsaError(f"network error: {e}") from e
+        except (socket.timeout, TimeoutError) as e:
+            # A read timeout is raised bare by http.client, not as URLError.
+            # (socket.timeout is TimeoutError itself from Python 3.10.)
+            raise errors.TimeoutError(f"request timed out after {eff_timeout}s") from e
+        except (http.client.HTTPException, OSError) as e:
+            # Connection reset or closed mid-response.
             raise errors.BrowsaError(f"network error: {e}") from e
 
 
@@ -992,6 +1004,42 @@ class Client:
         The empirical proof behind the trust score number."""
         return self._t.request("GET", f"/v1/agents/{agent_id}/detection-signal")
 
+    # ── Downloads and Phantom Live ───────────────────────────────────────
+
+    def list_downloads(self, agent_id: str) -> list[dict]:
+        """GET /v1/agents/:id/downloads: the files a running browser has
+        downloaded, newest first. Each row: name, size (bytes), modified_at.
+        With Playwright a file's name is the last part of
+        `await download.path()`. The folder is removed when the browser
+        stops, so fetch files first. Free."""
+        body = self._t.request("GET", f"/v1/agents/{agent_id}/downloads") or {}
+        return list(body.get("files") or [])
+
+    def download_file(self, agent_id: str, name: str) -> bytes:
+        """GET /v1/agents/:id/downloads/:name: one downloaded file's bytes.
+        `name` comes from list_downloads(). Free."""
+        path = f"/v1/agents/{agent_id}/downloads/{urllib.parse.quote(name, safe='')}"
+        return self._t.request("GET", path, raw=True, timeout=max(self._t.timeout, 120.0))
+
+    def create_live_link(self, agent_id: str, *, scope: Optional[str] = None,
+                         ttl_seconds: Optional[int] = None, job_id: Optional[str] = None) -> dict:
+        """POST /v1/agents/:id/live: a Phantom Live link to a running
+        browser. scope is "view" (watch only, the default) or "control"
+        (click and type). ttl_seconds is 60 to 86400. job_id ties the link
+        to one task on that browser and shows its steps.
+
+        Returns {live_url, expires_at, scope, agent_id, job_id?}. A link
+        opens once: make one per person or tab, and call this again for
+        another. Free."""
+        body: dict = {}
+        if scope is not None:
+            body["scope"] = scope
+        if ttl_seconds is not None:
+            body["ttl_seconds"] = ttl_seconds
+        if job_id is not None:
+            body["job_id"] = job_id
+        return self._t.request("POST", f"/v1/agents/{agent_id}/live", body=body)
+
     # ── Page view: observe and act without CDP ───────────────────────────
 
     def _page_session(self, agent_id: str, tab: Optional[str], session: Optional[str]) -> Optional[str]:
@@ -1449,6 +1497,15 @@ class AsyncClient:
 
     async def detection_signal(self, agent_id: str) -> dict:
         return await asyncio.to_thread(self._sync.detection_signal, agent_id)
+
+    async def list_downloads(self, agent_id: str) -> list[dict]:
+        return await asyncio.to_thread(self._sync.list_downloads, agent_id)
+
+    async def download_file(self, agent_id: str, name: str) -> bytes:
+        return await asyncio.to_thread(self._sync.download_file, agent_id, name)
+
+    async def create_live_link(self, agent_id: str, **kw: Any) -> dict:
+        return await asyncio.to_thread(self._sync.create_live_link, agent_id, **kw)
 
     async def observe(self, agent_id: str, **kw: Any) -> dict:
         return await asyncio.to_thread(self._sync.observe, agent_id, **kw)

@@ -671,3 +671,40 @@ test("the view session is remembered per browser and tab", async () => {
   await c.act("agt_1", { action: "click", id: 3, session: "pv_mine" });
   assert.equal(calls[6].body.session, "pv_mine");
 });
+
+// ── 0.3.1: downloads and Phantom Live ────────────────────────────────────
+
+test("listDownloads, downloadFile and createLiveLink hit the right routes", async () => {
+  const seen = [];
+  const c = new Client({
+    apiKey: "agt_live_test",
+    fetch: async (url, init) => {
+      const u = new URL(url);
+      seen.push([init.method, u.pathname, init.body ? JSON.parse(init.body) : null]);
+      if (u.pathname.endsWith("/downloads")) return new Response(JSON.stringify({ files: [{ name: "a b.pdf", size: 4, modified_at: "2026-11-16T00:00:00Z" }] }), { status: 200, headers: { "content-type": "application/json" } });
+      if (u.pathname.includes("/downloads/")) return new Response(new Uint8Array([37, 80, 68, 70]), { status: 200, headers: { "content-type": "application/octet-stream" } });
+      return new Response(JSON.stringify({ live_url: "https://browsa.io/live?agent=agt_1#c=lc_x", scope: "control", agent_id: "agt_1" }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const files = await c.listDownloads("agt_1");
+  assert.deepEqual(files, [{ name: "a b.pdf", size: 4, modified_at: "2026-11-16T00:00:00Z" }]);
+  const bytes = await c.downloadFile("agt_1", "a b/..pdf");
+  assert.deepEqual([...bytes], [37, 80, 68, 70]);
+  const link = await c.createLiveLink("agt_1", { scope: "control", ttlSeconds: 600, jobId: "j1" });
+  assert.equal(link.scope, "control");
+  await c.createLiveLink("agt_1");
+  assert.deepEqual(seen, [
+    ["GET", "/v1/agents/agt_1/downloads", null],
+    ["GET", "/v1/agents/agt_1/downloads/a%20b%2F..pdf", null],
+    ["POST", "/v1/agents/agt_1/live", { scope: "control", ttl_seconds: 600, job_id: "j1" }],
+    ["POST", "/v1/agents/agt_1/live", {}],
+  ]);
+});
+
+test("downloadFile maps an error envelope to the usual classes", async () => {
+  const c = new Client({
+    apiKey: "agt_live_test",
+    fetch: async () => new Response(JSON.stringify({ error: "no such download", code: "DOWNLOAD_NOT_FOUND", request_id: "r1" }), { status: 404, headers: { "content-type": "application/json" } }),
+  });
+  await assert.rejects(() => c.downloadFile("agt_1", "x"), (e) => e instanceof NotFoundError && e.code === "DOWNLOAD_NOT_FOUND" && e.requestId === "r1");
+});

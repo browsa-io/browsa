@@ -52,9 +52,11 @@ export interface VerifyOptions {
 }
 
 export function verifySignature(
-  body: Buffer | Uint8Array | string,
+  // A Node Buffer is a Uint8Array, so both are accepted. Naming Buffer here
+  // would make the declaration file need @types/node in every consumer.
+  body: Uint8Array | string,
   header: string,
-  secret: Buffer | Uint8Array | string,
+  secret: Uint8Array | string,
   opts: VerifyOptions = {},
 ): boolean {
   const { t, v1 } = parseSignatureHeader(header);

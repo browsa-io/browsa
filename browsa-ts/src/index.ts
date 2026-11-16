@@ -8,11 +8,9 @@
  *     const c = new Client({ apiKey: "agt_live_..." });
  *     const job = await c.runTask({
  *         task: "Go to news.ycombinator.com and return the top story title.",
- *         llm: "claude-opus-5-5",
- *         llmApiKey: "sk-ant-...",
+ *         llm: "browsa",
  *     });
- *     console.log(job.finalResult);
- *     console.log("watch live:", job.liveUrl);
+ *     console.log(job.outcome, job.finalResult);
  *
  * Zero deps — pure Node 18+ fetch. The package ships as a small ESM+CJS
  * bundle with no transitive dependency surface, audit-friendly for
@@ -574,7 +572,7 @@ export class TimeoutError extends BrowsaError { constructor(...a: ConstructorPar
 const DEFAULT_BASE_URL = "https://browsa.io";
 const DEFAULT_TIMEOUT = 30_000;
 const DEFAULT_POLL_MS = 2000;
-export const VERSION = "0.3.0";
+export const VERSION = "0.3.1";
 const USER_AGENT = `browsa-ts/${VERSION}`;
 
 // Convert the TOP-LEVEL keys of a request body from camelCase to the
@@ -843,6 +841,35 @@ function throwForStatus(status: number, body: ErrorEnvelope, retryAfter?: number
 }
 
 // ── Page view: observe and act without CDP ─────────────────────────────
+
+/** One file a running browser downloaded (listDownloads()). */
+export interface DownloadedFile {
+  /** The site's file name, or the download id when the client asked for
+   *  files named by id (Playwright does: the last part of download.path()). */
+  name: string;
+  /** Bytes. */
+  size: number;
+  modified_at?: string;
+}
+
+/** Options for createLiveLink(). */
+export interface LiveLinkOptions {
+  /** "view" watches only (default); "control" can click and type. */
+  scope?: "view" | "control";
+  /** 60 to 86400. Default: one hour. */
+  ttlSeconds?: number;
+  /** Tie the link to one task on this browser and show its steps. */
+  jobId?: string;
+}
+
+/** A Phantom Live link (createLiveLink()). It opens once. */
+export interface LiveLink {
+  live_url: string;
+  expires_at?: string;
+  scope?: "view" | "control" | string;
+  agent_id?: string;
+  job_id?: string;
+}
 
 /** Options of observe(). */
 export interface ObserveOptions {
@@ -1226,9 +1253,14 @@ export class Client {
 
   /** GET /v1/jobs/:id/files/:name — download one output file's bytes. */
   async downloadJobFile(jobId: string, name: string): Promise<Uint8Array> {
-    const url = `${this.baseUrl}/v1/jobs/${encodeURIComponent(jobId)}/files/${encodeURIComponent(name)}`;
+    return this.fetchBytes(`/v1/jobs/${encodeURIComponent(jobId)}/files/${encodeURIComponent(name)}`, this.timeoutMs);
+  }
+
+  /** GET a path and return the body as bytes; errors use the usual classes. */
+  private async fetchBytes(path: string, timeoutMs: number): Promise<Uint8Array> {
+    const url = `${this.baseUrl}${path}`;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let resp: Response;
     try {
       resp = await this.fetchImpl(url, {
@@ -1237,7 +1269,7 @@ export class Client {
         headers: { "X-API-Key": this.apiKey, "User-Agent": USER_AGENT },
       });
     } catch (e: any) {
-      if (e.name === "AbortError") throw new TimeoutError(`download timed out after ${this.timeoutMs}ms`);
+      if (e.name === "AbortError") throw new TimeoutError(`download timed out after ${timeoutMs}ms`);
       throw new BrowsaError(`network error: ${e.message ?? e}`);
     } finally {
       clearTimeout(timer);
@@ -1630,6 +1662,40 @@ export class Client {
       this.pageSessions.set(agentId, seen);
     }
     return r;
+  }
+
+  /**
+   * GET /v1/agents/{id}/downloads: the files a running browser has
+   * downloaded, newest first. The folder is removed when the browser stops,
+   * so fetch files first. Free.
+   */
+  async listDownloads(agentId: string): Promise<DownloadedFile[]> {
+    const r = await this.request<{ files?: DownloadedFile[] }>("GET", `/v1/agents/${encodeURIComponent(agentId)}/downloads`);
+    return r?.files ?? [];
+  }
+
+  /**
+   * GET /v1/agents/{id}/downloads/{name}: one downloaded file's bytes.
+   * `name` comes from listDownloads(). Free.
+   */
+  async downloadFile(agentId: string, name: string): Promise<Uint8Array> {
+    return this.fetchBytes(
+      `/v1/agents/${encodeURIComponent(agentId)}/downloads/${encodeURIComponent(name)}`,
+      Math.max(this.timeoutMs, 120_000),
+    );
+  }
+
+  /**
+   * POST /v1/agents/{id}/live: a Phantom Live link to a running browser.
+   * A link opens once: make one per person or tab, and call this again for
+   * another. Free.
+   */
+  async createLiveLink(agentId: string, opts: LiveLinkOptions = {}): Promise<LiveLink> {
+    const body: Record<string, unknown> = {};
+    if (opts.scope != null) body.scope = opts.scope;
+    if (opts.ttlSeconds != null) body.ttl_seconds = opts.ttlSeconds;
+    if (opts.jobId != null) body.job_id = opts.jobId;
+    return this.request<LiveLink>("POST", `/v1/agents/${encodeURIComponent(agentId)}/live`, { body });
   }
 
   /**

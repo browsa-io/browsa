@@ -70,7 +70,7 @@ const client = new Client({
 });
 
 const server = new Server(
-  { name: "browsa", version: "0.3.0" },
+  { name: "browsa", version: "0.3.1" },
   { capabilities: { tools: {} } },
 );
 
@@ -87,8 +87,10 @@ const tools = [
     name: "run_task",
     description:
       "Run a browser-driven AI task on a fresh real Chromium burner. " +
-      "Returns the final result, total steps, and a live noVNC URL the user " +
-      "can open to watch the browser drive in real time. Use this when the " +
+      "Returns the final result, the outcome and the total steps. `status: completed` " +
+      "only means the run ended: read `outcome`. `outcome: failed` with " +
+      "`status: completed` means the agent finished but could not do the task, and " +
+      "`final_result` says what stopped it. Use this when the " +
       "user asks for anything web-shaped: scrape, fill, click, extract, login, " +
       "place an order, search, summarize a page, etc. The browser is a real " +
       "macOS-Chrome-fingerprinted Chromium with built-in CAPTCHA solving " +
@@ -550,7 +552,7 @@ function llmKeyError(e: InstanceType<typeof BrowsaError>, choice: LlmChoice) {
 async function proxyNetwork() {
   const base = (BASE_URL || "https://browsa.io").replace(/\/+$/, "");
   const resp = await fetch(`${base}/v1/proxy-network`, {
-    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.0" },
+    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.1" },
   });
   const body: any = await resp.json().catch(() => ({}));
   if (resp.status === 404) return { enabled: false, tiers: [] };
@@ -579,7 +581,7 @@ function proxyUsage(raw: any): Record<string, unknown> {
 async function apiGet(path: string): Promise<any> {
   const base = (BASE_URL || "https://browsa.io").replace(/\/+$/, "");
   const resp = await fetch(`${base}${path}`, {
-    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.0" },
+    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.1" },
   });
   const body: any = await resp.json().catch(() => ({}));
   if (!resp.ok) {
@@ -595,7 +597,7 @@ async function apiPost(path: string, payload: unknown, timeoutMs = 90_000): Prom
     method: "POST",
     headers: {
       "X-API-Key": API_KEY!, Accept: "application/json", "Content-Type": "application/json",
-      "User-Agent": "browsa-mcp/0.3.0",
+      "User-Agent": "browsa-mcp/0.3.1",
     },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(timeoutMs),
@@ -643,6 +645,17 @@ async function listModels() {
 
 // The LLM side of a finished job, from its result. Jobs that have none of
 // these (older jobs, or still running) add nothing to the tool result.
+// How the run ended, in the API's own words. A job can be `completed` and
+// still not have done the task (outcome "failed"), so every job result
+// carries these. Empty signals are left out.
+function outcomeFields(job: { outcome?: string; outcomeMessage?: string; signals?: unknown[] }) {
+  return {
+    outcome: job.outcome,
+    outcome_message: job.outcomeMessage,
+    ...(job.signals && job.signals.length ? { signals: job.signals } : {}),
+  };
+}
+
 function llmResultFields(job: { raw?: Record<string, any> }) {
   const r = job.raw?.result;
   if (!r || typeof r !== "object") return {};
@@ -695,6 +708,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(fellBack ? { note: HOSTED_FALLBACK_TASK_NOTE, llm: "browsa" } : {}),
           job_id: job.id,
           status: job.status,
+          ...outcomeFields(job),
           steps: `${job.stepCount}/${job.progressTotal}`,
           live_url: job.liveUrl,
           credits_charged: job.creditsCharged,
@@ -712,6 +726,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({
           job_id: job.id,
           status: job.status,
+          ...outcomeFields(job),
           steps: `${job.stepCount}/${job.progressTotal}`,
           live_url: job.liveUrl,
           input_question: job.inputQuestion,

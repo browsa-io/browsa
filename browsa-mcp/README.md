@@ -16,7 +16,7 @@ MCP (Model Context Protocol) server for [Browsa](https://browsa.io): turn any LL
 Most "AI agent" setups stop at the LLM. We give the LLM a real browser. Through MCP, Claude can now:
 - Navigate, fill forms, click, scroll, scrape
 - Return results as structured JSON
-- Use your own HTTP or SOCKS5 proxy per browser (Browsa supplies no proxies)
+- Use your own HTTP or SOCKS5 proxy per browser, or a tier of Browsa's built-in network where it is on (see `proxy_network`)
 - Stay logged in across calls via persistent identities
 
 No code from you: just configure Claude Desktop (or Cursor / Cline / Zed) once, and ask in natural language.
@@ -100,18 +100,21 @@ Hosted tiers need no LLM key and add a flat number of credits per task. Which mo
 
 `reasoning` is `"low"`, `"medium"` or `"high"`; leave it out for the tier's or the provider's default. Ask in plain language, for example: *"Use browsa-smart with high reasoning to compare the pricing pages of these three sites."*
 
+`run_task` and `get_job` results carry `status` and `outcome`. `status: completed` only means the run ended; `outcome: failed` with it means the agent finished but could not do the task, and `outcome_message` and `final_result` say why. `signals` lists what was seen on the way (a bot check, a proxy failure) when there is any.
+
 When the job has them, `run_task` and `get_job` results include `usage` (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `requests`), `llm_tier`, `reasoning` (the level that was applied) and `llm_cost_usd`. `llm_cost_usd` is an estimate from public list prices for runs with your own key; it is `null` when unknown and always `null` for hosted runs, which are paid in credits.
 
 ## Tools exposed
 
 | Tool | What |
 |---|---|
-| `run_task` | Run a browser-driven task. Returns final result + live noVNC URL. Optional `llm`, `reasoning`, `llm_key_id`. |
+| `run_task` | Run a browser-driven task. Returns the final result, `outcome` and steps. Optional `llm`, `reasoning`, `llm_key_id`. |
 | `get_job` | Poll a long-running task. Optional server-side `wait_seconds`. |
 | `cancel_job` | Cancel a running task. |
 | `respond_to_job` | Answer an `input_required` prompt (CAPTCHA, decision). |
 | `start_browser` | Start a real cloud browser and get its CDP URL, to drive yourself with Playwright or Puppeteer. |
 | `stop_browser` | Stop a browser from `start_browser` and release it. |
+| `proxy_network` | Whether Browsa's built-in proxy network is on, its tiers, countries and price. Read-only and free. |
 | `observe` | Read the page of a browser from `start_browser` as compact text with element ids. No Playwright needed. |
 | `act` | One action in that browser (click, type, press, select, scroll, navigate, wait and more); returns what changed. |
 | `list_browsers` | List this workspace's browsers and their status. |

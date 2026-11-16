@@ -1,6 +1,6 @@
 {
   "name": "browsa",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Official TypeScript SDK for Browsa: real cloud browsers for AI agents (browsa.io)",
   "license": "MIT",
   "author": "Browsa <support@browsa.io>",
@@ -24,21 +24,32 @@
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./dist/index.d.cts",
   "bin": {
     "browsa": "dist/cli.js"
   },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./webhooks": {
-      "types": "./dist/webhooks.d.ts",
-      "import": "./dist/webhooks.js",
-      "require": "./dist/webhooks.cjs"
-    }
+      "import": {
+        "types": "./dist/webhooks.d.ts",
+        "default": "./dist/webhooks.js"
+      },
+      "require": {
+        "types": "./dist/webhooks.d.cts",
+        "default": "./dist/webhooks.cjs"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -60,5 +71,12 @@
     "type": "git",
     "url": "git+https://github.com/browsa-io/browsa.git",
     "directory": "browsa-ts"
+  },
+  "typesVersions": {
+    "*": {
+      "webhooks": [
+        "./dist/webhooks.d.cts"
+      ]
+    }
   }
 }

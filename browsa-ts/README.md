@@ -26,14 +26,17 @@ import { Client } from "browsa";
 const c = new Client({ apiKey: "agt_live_..." });
 const job = await c.runTask({
   task: "Go to news.ycombinator.com and return the top story title.",
-  llm: "claude-opus-5-5",
-  llmApiKey: "sk-ant-...",
+  llm: "browsa",
+  onProgress: (j) => j.liveUrl && console.log("watch live:", j.liveUrl),
 });
-console.log(job.finalResult);
-console.log("watch live:", job.liveUrl);
+console.log(job.outcome, job.finalResult);
 ```
 
-That runs a real Chromium fork (Phantom, our real browser) inside an isolated burner session, driven by [browser-use](https://browser-use.com) + Claude Opus. The agent navigates, extracts, and returns. A live noVNC stream URL is available the moment the burner spawns.
+That runs Phantom, our Chromium build, in a temporary cloud browser, driven by Browsa's hosted model: no LLM key needed. To use your own model instead, pass `llm: "anthropic:claude-sonnet-5-5"` with `llmApiKey`, or save the key once (below).
+
+`job.status` says the run ended; `job.outcome` says how. `outcome: "failed"` with `status: "completed"` means the agent finished but could not do the task, and `finalResult` says what stopped it.
+
+`liveUrl` is a Phantom Live link to watch the browser. It exists only while the task runs (so read it in `onProgress` or from `createTask`), and each link opens once.
 
 ## Saved LLM keys
 
@@ -129,7 +132,7 @@ app.post("/webhook",
 
 | Capability | Notes |
 |---|---|
-| Typed `Job` + `Webhook` | Full TypeScript types, with `.raw` escape hatch |
+| Typed `Job` + `Webhook` | Full TypeScript types for ESM and CommonJS projects, with `.raw` escape hatch |
 | Hosted tiers + reasoning | `llm: "browsa" / "browsa-fast" / "browsa-smart"`, `reasoning`, `models()`, `job.usage` |
 | Long-poll waits | `waitForJob({ timeoutMs })` uses server-side `?wait=30` |
 | Live step events | `for await (const ev of client.streamJobEvents(jobId, { after }))`; resume with `after: lastN` |
@@ -210,6 +213,26 @@ await c.act(b.id, { action: "click", role: "button", name: "Sign in" });
 ```
 
 `status` is `ok`, `failed`, `blocked`, `challenge` or `stale`; none of them throws. `stale` means the ids came from a view the server no longer has (`ids_reset` is true): nothing was done and `text` carries a new view. Both calls are free. Format and actions: <https://browsa.io/docs#agents-observe>.
+
+### Downloads and Phantom Live
+
+Files a browser downloads are kept with the browser, not on your machine, so Playwright's `download.saveAs()` cannot reach them. List and fetch them through the API before you stop the browser:
+
+```ts
+const files = await c.listDownloads(b.id);          // [{ name, size, modified_at }]
+const bytes = await c.downloadFile(b.id, files[0].name);
+```
+
+With Playwright the name is the last part of `await download.path()`.
+
+`createLiveLink` gives a link that shows a running browser in any web browser, to watch or to take over:
+
+```ts
+const link = await c.createLiveLink(b.id, { scope: "control", ttlSeconds: 600 });
+console.log(link.live_url);                         // opens once; make one per person
+```
+
+`scope` is `"view"` (default) or `"control"`. Both calls are free.
 
 ## Docs
 

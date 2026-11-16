@@ -147,6 +147,8 @@ def test_client_requires_agt_prefix():
 
 
 class _RecordingTransport:
+    timeout = 30.0
+
     def __init__(self, reply):
         self.calls = []
         self.reply = reply
@@ -965,3 +967,96 @@ def test_async_observe_and_act():
         ("POST", "/v1/agents/agt_1/observe", {"scope": "page"}),
         ("POST", "/v1/agents/agt_1/act", {"action": "click", "role": "button", "name": "Continue", "session": "pv_a"}),
     ]
+
+
+# ─── 0.3.1: timeouts and dropped connections are BrowsaError ─────────────
+
+
+def _silent_server(mode):
+    """A raw socket server. mode "hang": accepts and never answers.
+    mode "drop": reads the request and closes without a response."""
+    import socket
+    import threading
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+    conns = []
+
+    def loop():
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            if mode == "drop":
+                conn.recv(4096)
+                conn.close()
+            else:
+                conns.append(conn)
+
+    threading.Thread(target=loop, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.getsockname()[1]}"
+
+
+def test_read_timeout_raises_the_sdk_timeout_error():
+    from browsa import BrowsaError, Client, TimeoutError as SdkTimeout
+    srv, url = _silent_server("hang")
+    try:
+        with pytest.raises(SdkTimeout) as ei:
+            Client("agt_test_x", base_url=url, timeout=0.3).credits()
+    finally:
+        srv.close()
+    assert isinstance(ei.value, BrowsaError)
+    assert "timed out" in str(ei.value)
+
+
+def test_dropped_connection_raises_browsa_error():
+    from browsa import BrowsaError, Client
+    srv, url = _silent_server("drop")
+    try:
+        with pytest.raises(BrowsaError):
+            Client("agt_test_x", base_url=url, timeout=2).credits()
+    finally:
+        srv.close()
+
+
+def test_py_typed_marker_is_in_the_package():
+    import os
+    import browsa
+    assert os.path.exists(os.path.join(os.path.dirname(browsa.__file__), "py.typed"))
+
+
+# ─── 0.3.1: downloads and Phantom Live ───────────────────────────────────
+
+
+def test_downloads_and_live_link_requests():
+    from browsa import Client
+    c = Client("agt_test_x")
+    c._t = _RecordingTransport({"files": [{"name": "a b.pdf", "size": 3, "modified_at": "2026-11-16T00:00:00Z"}]})
+    assert c.list_downloads("agt_1") == [{"name": "a b.pdf", "size": 3, "modified_at": "2026-11-16T00:00:00Z"}]
+    assert c._t.calls[0][:2] == ("GET", "/v1/agents/agt_1/downloads")
+    c._t.reply = b"%PDF"
+    assert c.download_file("agt_1", "a b/..pdf") == b"%PDF"
+    assert c._t.calls[1][:2] == ("GET", "/v1/agents/agt_1/downloads/a%20b%2F..pdf")
+    c._t.reply = {"live_url": "https://browsa.io/live?agent=agt_1#c=lc_x", "scope": "control"}
+    r = c.create_live_link("agt_1", scope="control", ttl_seconds=600, job_id="j1")
+    assert r["scope"] == "control"
+    assert c._t.calls[2] == ("POST", "/v1/agents/agt_1/live", {"scope": "control", "ttl_seconds": 600, "job_id": "j1"})
+    c.create_live_link("agt_1")
+    assert c._t.calls[3] == ("POST", "/v1/agents/agt_1/live", {})
+
+
+def test_async_downloads_and_live_link():
+    import asyncio
+    from browsa import AsyncClient
+    c = AsyncClient("agt_test_x")
+    c._sync._t = _RecordingTransport({"files": []})
+
+    async def run():
+        files = await c.list_downloads("agt_1")
+        await c.create_live_link("agt_1", scope="view")
+        return files
+
+    assert asyncio.run(run()) == []
+    assert c._sync._t.calls[1] == ("POST", "/v1/agents/agt_1/live", {"scope": "view"})

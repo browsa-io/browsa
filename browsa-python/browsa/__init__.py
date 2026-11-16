@@ -7,24 +7,22 @@ Quickstart:
 
     client = Client(api_key="agt_live_...")
 
-    # Run a task synchronously (blocks until the agent finishes)
+    # Run a task and wait for it (hosted model: no LLM key needed)
     job = client.run_task(
         task="Go to news.ycombinator.com and return the top story title.",
-        llm="claude-opus-5-5",
-        llm_api_key="sk-ant-...",
+        llm="browsa",
     )
-    print(job.final_result)
-    print(f"Live stream: {job.live_url}")
+    print(job.outcome, job.final_result)
 
-That's it. Five lines of Python to drive a real browser through
-an AI agent, get back structured output, and a live noVNC viewer URL.
+job.status says the run ended; job.outcome says how ("failed" with status
+"completed": the agent finished but could not do the task).
 
 For async usage:
 
     from browsa import AsyncClient
 
     async with AsyncClient(api_key="agt_live_...") as c:
-        job = await c.run_task(task="...", llm="claude-opus-5-5", ...)
+        job = await c.run_task(task="...", llm="browsa")
 
 For webhooks see browsa.webhooks.verify_signature.
 """

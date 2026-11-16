@@ -25,14 +25,17 @@ from browsa import Client
 c = Client(api_key="agt_live_...")
 job = c.run_task(
     task="Go to news.ycombinator.com and return the top story title.",
-    llm="claude-opus-5-5",
-    llm_api_key="sk-ant-...",
+    llm="browsa",
+    on_progress=lambda j: j.live_url and print("watch live:", j.live_url),
 )
-print(job.final_result)
-print("watch live:", job.live_url)
+print(job.outcome, job.final_result)
 ```
 
-That runs a real Chromium fork (Phantom, our real browser) inside an isolated burner session, driven by [browser-use](https://browser-use.com) + Claude Opus. The agent navigates, extracts, and returns. A live noVNC stream URL is available the moment the burner spawns.
+That runs Phantom, our Chromium build, in a temporary cloud browser, driven by Browsa's hosted model: no LLM key needed. To use your own model instead, pass `llm="anthropic:claude-sonnet-5-5"` with `llm_api_key`, or save the key once (below).
+
+`job.status` says the run ended; `job.outcome` says how. `outcome == "failed"` with `status == "completed"` means the agent finished but could not do the task, and `final_result` says what stopped it.
+
+`live_url` is a Phantom Live link to watch the browser. It exists only while the task runs (so read it in `on_progress` or from `create_task`), and each link opens once.
 
 ## Saved LLM keys
 
@@ -147,7 +150,8 @@ if not ok:
 | Long-poll waits | `wait_for_job(timeout=...)` uses server-side `?wait=30` |
 | Live step events | `for ev in client.stream_job_events(job_id, after=0)`; resume with `after=<last n>` |
 | Webhook signature verify | HMAC-SHA256, constant-time compare, skew check |
-| Canonical error envelope | `AuthError`, `InvalidIDError`, `RateLimitError`, etc. |
+| Canonical error envelope | `AuthError`, `InvalidIDError`, `RateLimitError`, `TimeoutError`, etc.; every one is a `BrowsaError` |
+| Typed | Ships `py.typed`; works with `mypy --strict` and pyright |
 | `X-Request-Id` propagation | Every error carries the server's request id |
 | Zero deps | Single wheel, audit-friendly, no transitive surface |
 
@@ -227,6 +231,26 @@ c.act(b["id"], "click", role="button", name="Sign in")
 ```
 
 `status` is `ok`, `failed`, `blocked`, `challenge` or `stale`; none of them raises. `stale` means the ids came from a view the server no longer has (`ids_reset` is true): nothing was done and `text` carries a new view. Both calls are free. Format and actions: <https://browsa.io/docs#agents-observe>.
+
+### Downloads and Phantom Live
+
+Files a browser downloads are kept with the browser, not on your machine, so Playwright's `download.save_as()` cannot reach them. List and fetch them through the API before you stop the browser:
+
+```python
+files = c.list_downloads(b["id"])                   # [{"name", "size", "modified_at"}]
+data = c.download_file(b["id"], files[0]["name"])   # bytes
+```
+
+With Playwright the name is the last part of `download.path()`.
+
+`create_live_link` gives a link that shows a running browser in any web browser, to watch or to take over:
+
+```python
+link = c.create_live_link(b["id"], scope="control", ttl_seconds=600)
+print(link["live_url"])                             # opens once; make one per person
+```
+
+`scope` is `"view"` (default) or `"control"`. Both calls are free.
 
 ## Docs
 
