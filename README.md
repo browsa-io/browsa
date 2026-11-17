@@ -1,6 +1,6 @@
 # Browsa SDKs and MCP server
 
-Official clients for [Browsa](https://browsa.io), cloud browsers for AI agents. Each browser is Phantom, Browsa's own Chromium build.
+Official clients for [Browsa](https://browsa.io), cloud browsers for AI agents. Each browser is Phantom, Browsa's own browser.
 
 [![PyPI](https://img.shields.io/pypi/v/browsa?label=PyPI%20browsa)](https://pypi.org/project/browsa/)
 [![npm browsa](https://img.shields.io/npm/v/browsa?label=npm%20browsa)](https://www.npmjs.com/package/browsa)
@@ -15,7 +15,7 @@ Official clients for [Browsa](https://browsa.io), cloud browsers for AI agents. 
 ## What you can do
 
 - **Run an agent task.** Describe the job in plain language and get JSON back. Use your own Anthropic, OpenAI or Google key, or a hosted tier (`"llm": "browsa"`) with no key.
-- **Drive a browser yourself.** Start a cloud Chromium and connect Playwright or Puppeteer over CDP.
+- **Drive a browser yourself.** Start a Phantom browser in the cloud and connect Playwright or Puppeteer over CDP.
 - **Scrape, extract or screenshot a page** in one call.
 - **Schedule a task and receive results** on a signed webhook.
 

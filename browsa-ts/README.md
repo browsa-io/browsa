@@ -32,7 +32,7 @@ const job = await c.runTask({
 console.log(job.outcome, job.finalResult);
 ```
 
-That runs Phantom, our Chromium build, in a temporary cloud browser, driven by Browsa's hosted model: no LLM key needed. To use your own model instead, pass `llm: "anthropic:claude-sonnet-5-5"` with `llmApiKey`, or save the key once (below).
+That runs Phantom, our own browser, in a temporary cloud browser, driven by Browsa's hosted model: no LLM key needed. To use your own model instead, pass `llm: "anthropic:claude-sonnet-5-5"` with `llmApiKey`, or save the key once (below).
 
 `job.status` says the run ended; `job.outcome` says how. `outcome: "failed"` with `status: "completed"` means the agent finished but could not do the task, and `finalResult` says what stopped it.
 
@@ -71,7 +71,7 @@ CLI: `browsa llm-keys` lists saved keys; `browsa run "<task>" --llm-key-id <id>`
 
 ## Models
 
-A task runs on one of Browsa's hosted tiers, or on any provider model with your own key. reCAPTCHA v2 image grids of the 3 x 3 kind and image-text captchas met during a task are solved in the browser's own session on workspaces that have bought a pack; other kinds are listed at https://browsa.io/captcha.
+A task runs on one of Browsa's hosted tiers, or on any provider model with your own key. reCAPTCHA v2 image grids (3 x 3, 4 x 4 and reloading tiles), image-text captchas, GeeTest slide puzzles (v3 and v4) and AWS WAF captchas met during a task are solved in the browser's own session on workspaces that have bought a pack; other kinds are listed at https://browsa.io/captcha.
 
 | `llm` | What it is |
 |---|---|

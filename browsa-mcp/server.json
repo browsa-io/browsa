@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.browsa/browsa",
-  "description": "Cloud browsers for AI agents: run web tasks in plain English or drive real Chromium over CDP.",
+  "description": "Cloud browsers for AI agents: run any web task in plain English on Phantom, Browsa's own browser.",
   "repository": {
     "url": "https://github.com/browsa-io/browsa",
     "source": "github",

@@ -31,7 +31,7 @@ job = c.run_task(
 print(job.outcome, job.final_result)
 ```
 
-That runs Phantom, our Chromium build, in a temporary cloud browser, driven by Browsa's hosted model: no LLM key needed. To use your own model instead, pass `llm="anthropic:claude-sonnet-5-5"` with `llm_api_key`, or save the key once (below).
+That runs Phantom, our own browser, in a temporary cloud browser, driven by Browsa's hosted model: no LLM key needed. To use your own model instead, pass `llm="anthropic:claude-sonnet-5-5"` with `llm_api_key`, or save the key once (below).
 
 `job.status` says the run ended; `job.outcome` says how. `outcome == "failed"` with `status == "completed"` means the agent finished but could not do the task, and `final_result` says what stopped it.
 
@@ -174,7 +174,7 @@ job = c.run_task(
 
 ### Interactive (input_required) tasks
 
-If your task can pause for human input (captcha, decision point), watch for status `input_required` and respond. Hosted tasks solve reCAPTCHA v2 image grids of the 3 x 3 kind and image-text captchas in the browser's own session on workspaces that have bought a pack (fair use applies); the types and measured pass rates are at https://browsa.io/captcha. A type that is not supported yet, or a workspace on free credits only, may still need you here. Respond like this:
+If your task can pause for human input (captcha, decision point), watch for status `input_required` and respond. Hosted tasks solve reCAPTCHA v2 image grids (3 x 3, 4 x 4 and reloading tiles), image-text captchas, GeeTest slide puzzles (v3 and v4) and AWS WAF captchas in the browser's own session on workspaces that have bought a pack (fair use applies); the types and measured pass rates are at https://browsa.io/captcha. A type that is not supported yet, or a workspace on free credits only, may still need you here. Respond like this:
 
 ```python
 job = c.create_task(task="...", llm="...", llm_api_key="...")

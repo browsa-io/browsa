@@ -237,6 +237,7 @@ export type JobSignal =
   | "bot_check_seen"
   | "bot_check_passed"
   | "captcha_seen"
+  | "captcha_solved"
   | "proxy_failed"
   | "navigation_failed"
   | "llm_error"

@@ -36,7 +36,7 @@
  *     }
  *   }
  *
- * That's it. Claude can now drive a real Chromium fork.
+ * That's it. Claude can now drive a real Phantom browser.
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -91,14 +91,14 @@ const tools = [
   {
     name: "run_task",
     description:
-      "Run a browser-driven AI task on a fresh real Chromium burner. " +
+      "Run a browser-driven AI task on a fresh Phantom cloud browser. " +
       "Returns the final result, the outcome and the total steps. `status: completed` " +
       "only means the run ended: read `outcome`. `outcome: failed` with " +
       "`status: completed` means the agent finished but could not do the task, and " +
       "`final_result` says what stopped it. Use this when the " +
       "user asks for anything web-shaped: scrape, fill, click, extract, login, " +
       "place an order, search, summarize a page, etc. The browser is a real " +
-      "macOS-Chrome-fingerprinted Chromium with built-in CAPTCHA solving " +
+      "macOS-Chrome-fingerprinted Phantom browser with built-in CAPTCHA solving " +
       "(Turnstile, hCaptcha, reCAPTCHA, ALTCHA, FunCaptcha) and behavioral " +
       "humanization. Default timeout: 10 minutes.",
     inputSchema: {

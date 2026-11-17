@@ -7,7 +7,7 @@
 
 **Drive real browsers from Claude Desktop, Cursor, Cline, and any MCP-compatible client.**
 
-MCP (Model Context Protocol) server for [Browsa](https://browsa.io): turn any LLM into a real-browser agent with one config line. The agent gets a fresh cloud Chromium on Browsa's own build, and a live view link so you can watch it work.
+MCP (Model Context Protocol) server for [Browsa](https://browsa.io): turn any LLM into a real-browser agent with one config line. The agent gets a fresh cloud browser running Phantom, Browsa's own browser, and a live view link so you can watch it work.
 
 [![npm version](https://img.shields.io/npm/v/@browsa/mcp.svg)](https://www.npmjs.com/package/@browsa/mcp)
 
