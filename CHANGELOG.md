@@ -2,7 +2,7 @@
 
 Covers the three packages: npm `browsa`, npm `@browsa/mcp` and PyPI `browsa`. They share a version number.
 
-## 0.6.0 (`@browsa/mcp` only, not published yet)
+## 0.6.0 (`@browsa/mcp` only, published 2026-11-19)
 
 ### Changed
 
