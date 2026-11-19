@@ -1,7 +1,9 @@
 import type {
 	IDataObject,
 	IExecuteFunctions,
+	ILoadOptionsFunctions,
 	INodeExecutionData,
+	INodeListSearchResult,
 	INodeProperties,
 	INodeType,
 	INodeTypeDescription,
@@ -12,13 +14,24 @@ import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workf
 import {
 	browsaApiRequest,
 	crawlPagesToItems,
+	isRecipeRunUnsuccessful,
+	isRobotRunUnsuccessful,
 	isUnsuccessful,
 	jobIdOf,
+	locatorValue,
 	parseJsonObject,
+	parseRobotInputs,
+	RECIPE_RUN,
+	robotRowsToItems,
+	ROBOT_RUN,
 	simplifyJob,
+	simplifyRecipeRun,
+	simplifyRobotRun,
 	splitList,
 	waitForJob,
+	waitForRun,
 } from './GenericFunctions';
+import type { RunKind } from './GenericFunctions';
 
 /*
  * Programmatic style: Run Task and Crawl make several dependent calls (submit,
@@ -34,8 +47,14 @@ function waitFields(
 	waitName: string,
 ): INodeProperties[] {
 	const show = { resource: [resource], operation: [operation] };
-	const waitDescription =
-		'Whether to wait until the job ends and return its result. Off returns at once with the job ID; read it later with Job > Get.';
+	const what = resource === 'robot' || resource === 'recipe' ? 'run' : 'job';
+	const readLater =
+		resource === 'robot'
+			? 'Robot > Get Run'
+			: resource === 'recipe'
+				? 'Recipe > Get Run'
+				: 'Job > Get';
+	const waitDescription = `Whether to wait until the ${what} ends and return its result. Off returns at once with the ${what} ID; read it later with ${readLater}.`;
 	const waitDisplayName =
 		waitName === 'waitForCompletion' ? 'Wait for Completion' : 'Wait for Result';
 	const waitField: INodeProperties = waitDefault
@@ -64,8 +83,7 @@ function waitFields(
 			typeOptions: { minValue: 1 },
 			default: 600,
 			displayOptions: { show: { ...show, [waitName]: [true] } },
-			description:
-				'How long to wait for the job to end. The job keeps running on Browsa after this time; see "On Timeout" under Options.',
+			description: `How long to wait for the ${what} to end. The ${what} keeps running on Browsa after this time; see "On Timeout" under Options.`,
 		},
 		{
 			displayName: 'Simplify',
@@ -74,7 +92,9 @@ function waitFields(
 			default: true,
 			displayOptions: { show: { ...show, [waitName]: [true] } },
 			description:
-				'Whether to return a simplified response (ID, status, outcome, result, cost) instead of the raw job',
+				what === 'job'
+					? 'Whether to return a simplified response (ID, status, outcome, result, cost) instead of the raw job'
+					: 'Whether to return a simplified response (ID, status, output, cost) instead of the raw run',
 		},
 	];
 }
@@ -110,6 +130,38 @@ const waitOptions: INodeProperties[] = [
 	},
 ];
 
+/** On Timeout and Stop on Unsuccessful, worded for a robot or recipe run. */
+function runWaitOptions(label: string, failedStatuses: string): INodeProperties[] {
+	return [
+		{
+			displayName: 'On Timeout',
+			name: 'onTimeout',
+			type: 'options',
+			default: 'stop',
+			options: [
+				{
+					name: 'Stop the Workflow',
+					value: 'stop',
+					description: `Stop with a message that names the ${label} ID`,
+				},
+				{
+					name: 'Return the Run',
+					value: 'return',
+					description: 'Return the run as it is, with "wait_timed_out": true',
+				},
+			],
+			description: `What to do when the ${label} has not ended within the timeout`,
+		},
+		{
+			displayName: 'Stop on Unsuccessful Run',
+			name: 'stopOnUnsuccessful',
+			type: 'boolean',
+			default: false,
+			description: `Whether to stop the workflow when the ${label} ends with status ${failedStatuses}. Off returns the run with its status. Failed rows and failed runs are not charged.`,
+		},
+	];
+}
+
 export class Browsa implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Browsa',
@@ -119,7 +171,7 @@ export class Browsa implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description:
-			'Run browser tasks in plain language, and scrape, extract, screenshot or crawl pages in Phantom cloud browsers',
+			'Run robots, recipes and plain-language browser tasks, and scrape, extract, screenshot or crawl pages in Phantom cloud browsers',
 		defaults: {
 			name: 'Browsa',
 		},
@@ -139,12 +191,222 @@ export class Browsa implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				options: [
-					{ name: 'Task', value: 'task' },
-					{ name: 'Page', value: 'page' },
 					{ name: 'Job', value: 'job' },
+					{ name: 'Page', value: 'page' },
+					{ name: 'Recipe', value: 'recipe' },
+					{ name: 'Robot', value: 'robot' },
+					{ name: 'Task', value: 'task' },
 				],
+				// Stays 'task': n8n saves only changed parameters, so a new default
+				// would change existing workflows.
 				default: 'task',
 			},
+
+			// ── Robot and Recipe operations ────────────────────────────────
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: { show: { resource: ['robot'] } },
+				options: [
+					{
+						name: 'Get Run',
+						value: 'getRun',
+						description: 'Get the status and results of a robot run',
+						action: 'Get a robot run',
+					},
+					{
+						name: 'Run',
+						value: 'run',
+						description: 'Run a robot on its saved inputs or on the rows you give',
+						action: 'Run a robot',
+					},
+				],
+				default: 'run',
+			},
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: { show: { resource: ['recipe'] } },
+				options: [
+					{
+						name: 'Get Run',
+						value: 'getRun',
+						description: 'Get the status and output of a recipe run',
+						action: 'Get a recipe run',
+					},
+					{
+						name: 'Run',
+						value: 'run',
+						description: 'Replay a recipe with new parameters and get its output',
+						action: 'Run a recipe',
+					},
+				],
+				default: 'run',
+			},
+
+			// ── Robot > Run ────────────────────────────────────────────────
+			{
+				displayName: 'Robot',
+				name: 'robotId',
+				type: 'resourceLocator',
+				required: true,
+				default: { mode: 'list', value: '' },
+				displayOptions: { show: { resource: ['robot'], operation: ['run'] } },
+				description: 'The robot to run',
+				modes: [
+					{
+						displayName: 'From List',
+						name: 'list',
+						type: 'list',
+						typeOptions: { searchListMethod: 'searchRobots', searchable: true },
+					},
+					{
+						displayName: 'By ID',
+						name: 'id',
+						type: 'string',
+						placeholder: 'e.g. 6f1d2c3b-4a5e-4f60-8172-93a4b5c6d7e8',
+					},
+				],
+			},
+			{
+				displayName: 'Inputs',
+				name: 'inputsSource',
+				type: 'options',
+				default: 'saved',
+				displayOptions: { show: { resource: ['robot'], operation: ['run'] } },
+				options: [
+					{
+						name: 'Saved Inputs',
+						value: 'saved',
+						description: 'Run every row saved on the robot',
+					},
+					{
+						name: 'Rows Given Here',
+						value: 'rows',
+						description: 'Run the rows you give in JSON instead, for this run only',
+					},
+				],
+				description: 'Which input rows the robot runs. One run covers every row.',
+			},
+			{
+				displayName: 'Rows (JSON)',
+				name: 'robotInputs',
+				type: 'json',
+				required: true,
+				default: '[\n  {}\n]',
+				displayOptions: {
+					show: { resource: ['robot'], operation: ['run'], inputsSource: ['rows'] },
+				},
+				description:
+					'A JSON array of rows (at most 500), each an object of the robot\'s inputs, for example [{"asin": "B0C1234567"}, {"asin": "B0D7654321"}]',
+			},
+			...waitFields('robot', 'run', true, 'waitForResult'),
+			{
+				displayName: 'Output',
+				name: 'robotOutput',
+				type: 'options',
+				default: 'run',
+				displayOptions: {
+					show: { resource: ['robot'], operation: ['run', 'getRun'] },
+				},
+				options: [
+					{
+						name: 'One Run Item',
+						value: 'run',
+						description: 'Return the run, with every row in "rows"',
+					},
+					{
+						name: 'One Item per Row',
+						value: 'rows',
+						description: 'Each input row becomes its own item, with its output',
+					},
+				],
+				description: 'How to return a finished run',
+			},
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				displayOptions: { show: { resource: ['robot'], operation: ['run', 'getRun'] } },
+				options: [...runWaitOptions('robot run', "'partial' or 'failed'")],
+			},
+
+			// ── Robot > Get Run ────────────────────────────────────────────
+			{
+				displayName: 'Robot Run ID',
+				name: 'robotRunId',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'e.g. 6f1d2c3b-4a5e-4f60-8172-93a4b5c6d7e8',
+				displayOptions: { show: { resource: ['robot'], operation: ['getRun'] } },
+				description: 'ID of a robot run, as returned by Robot > Run or the Browsa Trigger',
+			},
+			...waitFields('robot', 'getRun', false, 'waitForCompletion'),
+
+			// ── Recipe > Run ───────────────────────────────────────────────
+			{
+				displayName: 'Recipe',
+				name: 'recipeId',
+				type: 'resourceLocator',
+				required: true,
+				default: { mode: 'list', value: '' },
+				displayOptions: { show: { resource: ['recipe'], operation: ['run'] } },
+				description: 'The recipe to replay',
+				modes: [
+					{
+						displayName: 'From List',
+						name: 'list',
+						type: 'list',
+						typeOptions: { searchListMethod: 'searchRecipes', searchable: true },
+					},
+					{
+						displayName: 'By ID',
+						name: 'id',
+						type: 'string',
+						placeholder: 'e.g. 6f1d2c3b-4a5e-4f60-8172-93a4b5c6d7e8',
+					},
+				],
+			},
+			{
+				displayName: 'Parameters',
+				name: 'recipeParams',
+				type: 'json',
+				required: true,
+				default: '{}',
+				displayOptions: { show: { resource: ['recipe'], operation: ['run'] } },
+				description:
+					'The recipe\'s parameters as a JSON object, for example {"query": "air fryer"}. They are checked against the recipe\'s parameter schema.',
+			},
+			...waitFields('recipe', 'run', true, 'waitForResult'),
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				displayOptions: { show: { resource: ['recipe'], operation: ['run', 'getRun'] } },
+				options: [...runWaitOptions('recipe run', "'failed' or 'cancelled'")],
+			},
+
+			// ── Recipe > Get Run ───────────────────────────────────────────
+			{
+				displayName: 'Recipe Run ID',
+				name: 'recipeRunId',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'e.g. 6f1d2c3b-4a5e-4f60-8172-93a4b5c6d7e8',
+				displayOptions: { show: { resource: ['recipe'], operation: ['getRun'] } },
+				description: 'ID of a recipe run, as returned by Recipe > Run or the Browsa Trigger',
+			},
+			...waitFields('recipe', 'getRun', false, 'waitForCompletion'),
 
 			// ── Operations ─────────────────────────────────────────────────
 			{
@@ -778,6 +1040,25 @@ export class Browsa implements INodeType {
 		],
 	};
 
+	methods = {
+		listSearch: {
+			async searchRobots(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+			): Promise<INodeListSearchResult> {
+				const r = await browsaApiRequest.call(this, 'GET', '/v1/robots', { qs: { limit: 200 } });
+				return { results: toListResults(r.robots, filter) };
+			},
+			async searchRecipes(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+			): Promise<INodeListSearchResult> {
+				const r = await browsaApiRequest.call(this, 'GET', '/v1/recipes', { qs: { limit: 200 } });
+				return { results: toListResults(r.recipes, filter) };
+			},
+		},
+	};
+
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
@@ -788,7 +1069,15 @@ export class Browsa implements INodeType {
 				const operation = this.getNodeParameter('operation', i) as string;
 				let out: INodeExecutionData[];
 
-				if (resource === 'task' && operation === 'run') {
+				if (resource === 'robot' && operation === 'run') {
+					out = await runRobot.call(this, i);
+				} else if (resource === 'robot' && operation === 'getRun') {
+					out = await getRobotRun.call(this, i);
+				} else if (resource === 'recipe' && operation === 'run') {
+					out = await runRecipe.call(this, i);
+				} else if (resource === 'recipe' && operation === 'getRun') {
+					out = await getRecipeRun.call(this, i);
+				} else if (resource === 'task' && operation === 'run') {
 					out = await runTask.call(this, i);
 				} else if (resource === 'job' && operation === 'get') {
 					out = await getJob.call(this, i);
@@ -1031,6 +1320,177 @@ async function crawl(this: IExecuteFunctions, i: number): Promise<INodeExecution
 		}
 		return shapeJob(job, simplify);
 	});
+}
+
+// ── Robots and recipes ───────────────────────────────────────────────────
+
+/** Robots or recipes as list entries, filtered by name or ID. */
+function toListResults(list: unknown, filter?: string): Array<{ name: string; value: string }> {
+	const rows = Array.isArray(list) ? (list as IDataObject[]) : [];
+	const f = (filter ?? '').trim().toLowerCase();
+	return rows
+		.map((r) => ({ name: String(r.name || r.id || ''), value: String(r.id ?? '') }))
+		.filter((r) => r.value)
+		.filter((r) => !f || r.name.toLowerCase().includes(f) || r.value.toLowerCase().includes(f));
+}
+
+interface RunShape {
+	kind: RunKind;
+	unsuccessful: (run: IDataObject) => boolean;
+	shape: (run: IDataObject, simplify: boolean) => INodeExecutionData[];
+}
+
+/** Waits for a robot or recipe run when asked to, applies the timeout and status options, and shapes the output. */
+async function finishRun(
+	this: IExecuteFunctions,
+	i: number,
+	accepted: IDataObject,
+	waitName: string,
+	how: RunShape,
+): Promise<INodeExecutionData[]> {
+	const wait = this.getNodeParameter(waitName, i, false) as boolean;
+	if (!wait) return [{ json: accepted }];
+
+	const id = String(accepted.id ?? accepted.run_id ?? '');
+	const timeout = this.getNodeParameter('timeout', i, 600) as number;
+	const simplify = this.getNodeParameter('simplify', i, true) as boolean;
+	const options = this.getNodeParameter('options', i, {}) as IDataObject;
+
+	let run = accepted;
+	let timedOut = false;
+	if (!how.kind.terminal.includes(String(accepted.status))) {
+		if (!id) {
+			throw new NodeOperationError(this.getNode(), `Browsa returned no ${how.kind.label} ID`, {
+				itemIndex: i,
+			});
+		}
+		({ job: run, timedOut } = await waitForRun.call(this, how.kind, id, timeout, i));
+	}
+	if (timedOut) {
+		if ((options.onTimeout ?? 'stop') === 'stop') {
+			throw new NodeOperationError(
+				this.getNode(),
+				`Browsa ${how.kind.label} ${id} is still ${String(run.status)} after ${timeout} seconds`,
+				{
+					itemIndex: i,
+					description: `The ${how.kind.label} keeps going on Browsa. Read it later with this ID, raise 'Timeout (Seconds)', or set 'On Timeout' to 'Return the Run'.`,
+				},
+			);
+		}
+		return [{ json: { ...run, wait_timed_out: true } }];
+	}
+	if (options.stopOnUnsuccessful === true && how.unsuccessful(run)) {
+		throw new NodeOperationError(
+			this.getNode(),
+			`Browsa ${how.kind.label} ${id} ended with status '${String(run.status)}'`,
+			{
+				itemIndex: i,
+				description: [run.error_message, run.error_code ? `Code ${String(run.error_code)}.` : '']
+					.filter(Boolean)
+					.join(' '),
+			},
+		);
+	}
+	return how.shape(run, simplify);
+}
+
+function robotShape(this: IExecuteFunctions, i: number): RunShape {
+	const output = this.getNodeParameter('robotOutput', i, 'run') as string;
+	return {
+		kind: ROBOT_RUN,
+		unsuccessful: isRobotRunUnsuccessful,
+		shape: (run, simplify) => {
+			if (output === 'rows' && Array.isArray(run.rows)) {
+				return robotRowsToItems(run, simplify).map((json) => ({ json }));
+			}
+			return [{ json: simplify ? simplifyRobotRun(run) : run }];
+		},
+	};
+}
+
+const recipeShape: RunShape = {
+	kind: RECIPE_RUN,
+	unsuccessful: isRecipeRunUnsuccessful,
+	shape: (run, simplify) => [{ json: simplify ? simplifyRecipeRun(run) : run }],
+};
+
+async function runRobot(this: IExecuteFunctions, i: number): Promise<INodeExecutionData[]> {
+	const robotId = locatorValue(this.getNodeParameter('robotId', i));
+	if (!robotId) {
+		throw new NodeOperationError(this.getNode(), "Choose a robot in 'Robot'", { itemIndex: i });
+	}
+	const body: IDataObject = {};
+	if (this.getNodeParameter('inputsSource', i, 'saved') === 'rows') {
+		const inputs = parseRobotInputs.call(this, this.getNodeParameter('robotInputs', i, ''), i);
+		if (!inputs) {
+			throw new NodeOperationError(this.getNode(), "'Rows (JSON)' has no rows", {
+				itemIndex: i,
+				description: "Give at least one row, or set 'Inputs' to 'Saved Inputs'.",
+			});
+		}
+		body.inputs = inputs;
+	}
+	const accepted = await browsaApiRequest.call(
+		this,
+		'POST',
+		`/v1/robots/${encodeURIComponent(robotId)}/run`,
+		{ body, itemIndex: i },
+	);
+	return await finishRun.call(this, i, accepted, 'waitForResult', robotShape.call(this, i));
+}
+
+async function getRobotRun(this: IExecuteFunctions, i: number): Promise<INodeExecutionData[]> {
+	const id = (this.getNodeParameter('robotRunId', i) as string).trim();
+	if (!id) {
+		throw new NodeOperationError(this.getNode(), "'Robot Run ID' is empty", { itemIndex: i });
+	}
+	const wait = this.getNodeParameter('waitForCompletion', i, false) as boolean;
+	const how = robotShape.call(this, i);
+	if (wait) return await finishRun.call(this, i, { id }, 'waitForCompletion', how);
+	const run = await browsaApiRequest.call(this, 'GET', `/v1/robot-runs/${encodeURIComponent(id)}`, {
+		itemIndex: i,
+	});
+	return how.shape(run, false);
+}
+
+async function runRecipe(this: IExecuteFunctions, i: number): Promise<INodeExecutionData[]> {
+	const recipeId = locatorValue(this.getNodeParameter('recipeId', i));
+	if (!recipeId) {
+		throw new NodeOperationError(this.getNode(), "Choose a recipe in 'Recipe'", { itemIndex: i });
+	}
+	const params =
+		parseJsonObject.call(this, this.getNodeParameter('recipeParams', i, ''), 'Parameters', i) ?? {};
+	const body: IDataObject = { params };
+	const wait = this.getNodeParameter('waitForResult', i, true) as boolean;
+	if (wait) {
+		const timeout = this.getNodeParameter('timeout', i, 600) as number;
+		body.wait = Math.min(60, Math.max(1, timeout));
+	}
+	const accepted = await browsaApiRequest.call(
+		this,
+		'POST',
+		`/v1/recipes/${encodeURIComponent(recipeId)}/run`,
+		{ body, timeoutMs: wait ? ((body.wait as number) + 15) * 1000 : undefined, itemIndex: i },
+	);
+	return await finishRun.call(this, i, accepted, 'waitForResult', recipeShape);
+}
+
+async function getRecipeRun(this: IExecuteFunctions, i: number): Promise<INodeExecutionData[]> {
+	const id = (this.getNodeParameter('recipeRunId', i) as string).trim();
+	if (!id) {
+		throw new NodeOperationError(this.getNode(), "'Recipe Run ID' is empty", { itemIndex: i });
+	}
+	const wait = this.getNodeParameter('waitForCompletion', i, false) as boolean;
+	if (wait) return await finishRun.call(this, i, { id }, 'waitForCompletion', recipeShape);
+	const run = await browsaApiRequest.call(
+		this,
+		'GET',
+		`/v1/recipe-runs/${encodeURIComponent(id)}`,
+		{
+			itemIndex: i,
+		},
+	);
+	return [{ json: run }];
 }
 
 /** Moves `screenshot_png_b64` out of the JSON into a binary field. */

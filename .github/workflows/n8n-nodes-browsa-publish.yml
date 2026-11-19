@@ -7,7 +7,8 @@
 # Adapted from the n8n-node CLI template for the public monorepo
 # github.com/browsa-io/browsa, where the package lives in integrations/n8n-nodes-browsa/.
 # GitHub only runs workflows from the repository root, so this file has to be
-# copied to .github/workflows/publish-n8n.yml at the root of browsa-io/browsa.
+# copied to .github/workflows/n8n-nodes-browsa-publish.yml at the root of
+# browsa-io/browsa (sdks/export-public.sh does it).
 #
 # Trigger: push a tag n8n-nodes-browsa-v<version> (for example
 # n8n-nodes-browsa-v0.1.0) whose version equals package.json, or run the
@@ -16,7 +17,7 @@
 # npm auth, one of:
 #   A. Trusted publishing (OIDC): on npmjs.com, package settings > Publish
 #      access > Trusted Publishers > GitHub Actions, owner browsa-io, repo
-#      browsa, workflow publish-n8n.yml. Leave NPM_TOKEN unset.
+#      browsa, workflow n8n-nodes-browsa-publish.yml. Leave NPM_TOKEN unset.
 #   B. A granular access token for this package in the repo secret NPM_TOKEN.
 # Trusted publishing needs npm 11.5.1 or later and Node 22.14.0 or later
 # (https://docs.npmjs.com/trusted-publishers).

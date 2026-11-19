@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+- **Robot** resource: Run (a robot from a list or by ID, on its saved inputs or on rows given as JSON; waits for the run or returns at once; one item for the run or one item per row) and Get Run.
+- **Recipe** resource: Run (a recipe with JSON parameters, waits with the server's long poll) and Get Run.
+- **Browsa Trigger** node: registers a Browsa webhook when the workflow is activated and removes it when it is deactivated. Events: Robot Run Completed, Robot Alert, Robot Failed, Recipe Run Completed, Task Completed, Task Needs User. Checks the `X-Agents-Signature` HMAC (5 minute window) and answers 401 to a bad signature. When Browsa does not know an event name yet, it subscribes to every event and filters them itself.
+- Resource list is now alphabetical. The default resource stays Task, so existing workflows do not change.
+
 ## 0.1.2 (2026-11-16)
 
 - Fixes 0.1.1, which was published without the compiled node (only the icons). Do not use 0.1.1.

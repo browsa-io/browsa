@@ -105,6 +105,46 @@ print(job.llm_cost_usd)                     # None for hosted runs
 
 A finished job has `usage` (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `requests`), `llm_cost_usd`, `llm_tier` and `reasoning` (the level that was applied). `llm_cost_usd` is an estimate from public list prices for runs with your own key; it is `None` when unknown and always `None` for hosted runs, which are paid in credits. All four are `None` on jobs that do not have them, such as jobs run before these fields existed.
 
+## Robots
+
+A robot is a browser job you set up once: record a task, then run it on rows of input, on demand, on a schedule or from the API. Runs replay the recording on Phantom with no model.
+
+```python
+BOOK = "https://books.toscrape.com/catalogue"
+
+# 1. Record a task once
+job = c.run_task(
+    task="Open the product page and return title, price and in_stock",
+    llm="browsa",
+    initial_url=f"{BOOK}/sharp-objects_997/index.html",
+    record_recipe=True,
+)
+
+# 2. Save it as a robot
+robot = c.robots.create(
+    name="Book prices",
+    from_job_id=job.id,
+    inputs=[{"url": f"{BOOK}/sharp-objects_997/index.html"}, {"url": f"{BOOK}/soumission_998/index.html"}],
+    schedule={"interval_seconds": 86400, "at": "09:00", "tz": "UTC"},
+    monitors=[{"field": "price", "op": "changed"}],
+    settings={"proxy": {"network": "datacenter"}},
+)
+
+# 3. Run it and read the rows
+run = c.robot_runs.wait(c.robots.run(robot.id).id)
+for r in run.rows or []:
+    print(r.row, r.status, r.output or r.error_code)
+csv_text = c.robot_runs.export(run.id)          # or format="json"
+```
+
+| | |
+|---|---|
+| Price | `robot.health.price_credits` per successful row, the same as the agent task. Failed rows are free. |
+| Settings | `model` (records and repairs), `proxy` (Browsa's network: datacenter 5, residential 50 credits/GB; or a saved `proxy_id`, free), `browser` (`os`, `screen`). Unset is Auto. |
+| More | `list`, `get`, `update`, `delete`, `pause`, `resume`, `runs`, `alerts`, `mark_alerts_read`. `AsyncClient` has the same under `await`. Recipes alone: `create_recipe`, `run_recipe`, `get_recipe_run`. |
+
+Guide: <https://browsa.io/guides/robots>.
+
 ## Async
 
 ```python
@@ -251,6 +291,38 @@ print(link["live_url"])                             # opens once; make one per p
 ```
 
 `scope` is `"view"` (default) or `"control"`. Both calls are free.
+
+## Captcha solving
+
+`browsa.captcha` is a client for Browsa's captcha API: `createTask`, `getTaskResult` and `getBalance` in the format CapSolver, Anti-Captcha, CapMonster and 2Captcha's v2 API share. Same key and credits as the browser API. Failed and unsolvable tasks are not charged. Measured pass rates per type: <https://browsa.io/captcha>.
+
+```python
+from browsa.captcha import CaptchaClient, CaptchaError, tasks
+
+cap = CaptchaClient()                    # BROWSA_API_KEY; https://captcha.browsa.io (or BROWSA_CAPTCHA_URL)
+sol = cap.solve(tasks.recaptcha_v3("https://example.com/login", "6Lc...", page_action="login"))
+token = sol["gRecaptchaResponse"]        # sol.task_id is the task id
+
+text = cap.solve(tasks.image_to_text(open("captcha.png", "rb").read()))["text"]
+print(cap.get_balance())                 # credits
+```
+
+Builders: `image_to_text`, `recaptcha_v2`, `recaptcha_v3`, `turnstile`, `recaptcha_v2_classification` (and `aws_waf_classification`, `slider`). Each takes `proxy=` (a URL string or `{"type", "host", "port", "username", "password"}`); without one the proxyless type is used. `AsyncCaptchaClient` has the same methods.
+
+A task copied from code for another service works as it is: `RecaptchaV2TaskProxyless`, `TurnstileTask`, `NoCaptchaTaskProxyless` and the like are sent under Browsa's names. Errors raise `CaptchaError` with the API's `code` (`ERROR_CAPTCHA_UNSOLVABLE`, `ERROR_ZERO_BALANCE`, ...).
+
+Coming from a library that cannot be pointed at another server:
+
+```python
+from browsa.captcha.compat import TwoCaptcha            # instead of: from twocaptcha import TwoCaptcha
+solver = TwoCaptcha("agt_live_...")
+solver.recaptcha(sitekey="6Le-...", url="https://example.com")["code"]
+
+from browsa.captcha.compat import use_with_anticaptcha  # anticaptchaofficial: its requests go to Browsa
+use_with_anticaptcha()
+```
+
+CapSolver (`capsolver.api_base = ...`) and CapMonster (`ClientOptions(service_url=...)`) take a base URL as they are.
 
 ## Docs
 

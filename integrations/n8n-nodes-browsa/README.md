@@ -1,10 +1,11 @@
 # n8n-nodes-browsa
 
-An [n8n](https://n8n.io/) community node for [Browsa](https://browsa.io), the cloud browser API for AI agents. Describe a task in plain language and an agent runs it in a Phantom cloud browser, or scrape, extract, screenshot and crawl pages in one call. Phantom is Browsa's own browser.
+[n8n](https://n8n.io/) community nodes for [Browsa](https://browsa.io), the cloud browser API for AI agents. Run a saved robot or recipe, describe a task in plain language and let an agent run it in a Phantom cloud browser, or scrape, extract, screenshot and crawl pages in one call. The **Browsa Trigger** node starts a workflow when a robot run ends, a robot alert fires, a recipe run ends or a task finishes. Phantom is Browsa's own browser.
 
 - [Install](#install)
 - [Credentials](#credentials)
 - [Operations](#operations)
+- [Browsa Trigger](#browsa-trigger)
 - [Costs](#costs)
 - [Use it as an AI Agent tool](#use-it-as-an-ai-agent-tool)
 - [Example workflows](#example-workflows)
@@ -63,12 +64,40 @@ n8n sends the key in the `X-API-Key` header. Saving the credential tests it with
 
 | Resource | Operation | Browsa endpoint |
 |---|---|---|
+| Robot | Run | `POST /v1/robots/{id}/run`, then `GET /v1/robot-runs/{id}` until it ends |
+| Robot | Get Run | `GET /v1/robot-runs/{id}` |
+| Recipe | Run | `POST /v1/recipes/{id}/run` with `wait`, then `GET /v1/recipe-runs/{id}` until it ends |
+| Recipe | Get Run | `GET /v1/recipe-runs/{id}` |
 | Task | Run | `POST /v1/tasks`, then `GET /v1/jobs/{id}` until it ends |
 | Job | Get | `GET /v1/jobs/{id}` |
 | Page | Scrape | `POST /v1/quick/scrape` |
 | Page | Extract Data | `POST /v1/quick/extract` |
 | Page | Take Screenshot | `POST /v1/quick/screenshot` |
 | Page | Crawl | `POST /v1/quick/crawl`, then `GET /v1/jobs/{id}` until it ends |
+
+### Robot > Run
+
+Runs a [robot](https://browsa.io/guides/robots): a saved job made from a recipe, with a table of input rows. One run covers every row.
+
+- **Robot**: pick it from the list or give its ID.
+- **Inputs**: **Saved Inputs** (default) runs the rows saved on the robot. **Rows Given Here** runs the JSON array you give instead, for this run only, at most 500 rows, for example `[{"asin": "B0C1234567"}, {"asin": "B0D7654321"}]`.
+- **Wait for Result** (on by default), **Timeout (Seconds)** and **Simplify**, as for Task > Run. A finished run has `status` `completed`, `partial` (some rows failed) or `failed`.
+- **Output**: **One Run Item** (default) returns the run with every row in `rows`. **One Item per Row** returns one item per input row with its `input`, `status`, `output` and the run ID, ready for an IF node, Slack or Google Sheets.
+- **Options**: On Timeout, and Stop on Unsuccessful Run (stops on `partial` or `failed`).
+
+A robot run costs the recipe's credits per input row; failed rows are free.
+
+### Robot > Get Run
+
+Reads a robot run by ID, with the same Output, Wait and Simplify options.
+
+### Recipe > Run
+
+Replays a [recipe](https://browsa.io/guides/recipes) with new **Parameters** (a JSON object checked against the recipe's parameter schema, for example `{"query": "air fryer"}`). With **Wait for Result** on, the node asks Browsa to hold the answer up to 60 seconds and then polls until the run ends or the timeout passes. A run returns `status` (`ok`, `failed` or `cancelled`), `output`, `error_code` (`blocked`, `needs_login`, `site_changed`, `invalid_output`, `params_invalid`, `timeout`), `repaired`, `duration_ms` and `credits`. Failed runs are free.
+
+### Recipe > Get Run
+
+Reads a recipe run by ID, with optional waiting.
 
 ### Task > Run
 
@@ -115,6 +144,27 @@ Follows links breadth first from a **Start URL** and scrapes each page. **Max Pa
 
 When Browsa answers with an error, the node shows its code (for example `INSUFFICIENT_CREDIT`, `TOO_MANY_REQUESTS`, `LLM_KEY_REQUIRED`), what to do, and the request ID to quote to support@browsa.io. With **Continue On Fail**, the item gets an `error` field instead. A workspace has 6 browser slots; when all are in use the API answers `429 TOO_MANY_REQUESTS` and charges nothing, so the node's **Retry On Fail** setting is a good fit.
 
+## Browsa Trigger
+
+Starts the workflow on Browsa events. Choose one or more **Events**:
+
+| Event | When |
+|---|---|
+| Robot Run Completed | A robot run ended, with one result per input row |
+| Robot Alert | A robot monitor fired, for example a price dropped below your value |
+| Robot Failed | A robot run failed as a whole |
+| Recipe Run Completed | A recipe run returned its output |
+| Task Completed | An agent task finished (Browsa sends it as `job.completed` with `job_kind: "task"`) |
+| Task Needs User | An agent task asked a question and waits for `POST /v1/jobs/{id}/respond` |
+
+How it works:
+
+- When you activate the workflow (or click **Listen for test event**), the node registers a webhook with `POST /v1/webhooks` for the n8n webhook URL and the chosen events, and reads the workspace signing secret from `GET /v1/webhooks/signing-secret`. Deactivating the workflow deletes the webhook.
+- Every delivery carries `X-Agents-Signature: t=<unix>, v1=<hex>`, an HMAC-SHA256 of `<unix>.<raw body>`. The node checks it (and refuses deliveries more than 5 minutes old) before it starts the workflow, and answers 401 otherwise. Turn **Check Signature** off under Options only to debug a proxy that changes the body.
+- If Browsa does not know one of the event names yet, the node subscribes to every event and drops the ones you did not choose. Ignored deliveries get a 200 and start nothing.
+- The output is the event: `event` (the trigger event it matched), `id`, `type`, `created_at`, `workspace_id`, `job_id`, `job_kind`, `data`, and `error_code` and `error_reason` for failures.
+- Browsa refuses webhook URLs that do not resolve to a public address, so n8n must be reachable from the internet (n8n Cloud, or a self-hosted instance with `WEBHOOK_URL` set to its public HTTPS address). `localhost` test URLs do not work.
+
 ## Costs
 
 Browsa bills in prepaid credits that never expire. From [llms-full.txt](https://browsa.io/llms-full.txt) and [pricing](https://browsa.io/pricing), as of 2026-11-15:
@@ -142,6 +192,8 @@ Older self-hosted n8n versions also needed `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_US
 
 ## Example workflows
 
+**Morning price check with a robot.** Schedule Trigger (every day at 8:00) > Browsa (Robot > Run, Output: One Item per Row) > IF (`{{ $json.output.price }}` is smaller than your target) > Slack (send a message) and Google Sheets (append `{{ $json.input.asin }}`, `{{ $json.output.price }}`). Or set a monitor on the robot ("price drops below 20") and start the workflow with the Browsa Trigger on **Robot Alert** instead of the schedule.
+
 **Daily price check.** Schedule Trigger > Browsa (Task > Run, Model: Browsa, Task: "Open https://books.toscrape.com and return the title and price of the first 5 books", Output Schema: `{"type":"object","properties":{"books":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"price":{"type":"number"}},"required":["title","price"]}}},"required":["books"]}`) > Google Sheets (append `{{$json.result.books}}`).
 
 **Docs to Markdown.** Manual Trigger > Browsa (Page > Crawl, Start URL `https://example.com/docs/`, Max Pages 20, Include Only URLs Matching `/docs/`) > one item per page with `markdown` > Write to your store.
@@ -150,7 +202,7 @@ Older self-hosted n8n versions also needed `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_US
 
 ## Compatibility
 
-Built with the official [n8n-node CLI](https://docs.n8n.io/integrations/creating-nodes/build/n8n-node/) 0.56.4 and `n8n-workflow` 2.47, in strict mode with n8n Cloud support on (`n8n-node cloud-support`). No runtime dependencies. Node API version 1. Checked to load in n8n 2.47.7 (node, AI tool variant and credential).
+Built with the official [n8n-node CLI](https://docs.n8n.io/integrations/creating-nodes/build/n8n-node/) 0.56.4 and `n8n-workflow` 2.47, in strict mode with n8n Cloud support on (`n8n-node cloud-support`). No runtime dependencies. Node API version 1. Version 0.1.x was checked to load in n8n 2.47.7 (node, AI tool variant and credential); 0.2.0 (Robot, Recipe and the Browsa Trigger) is tested with mocked HTTP only so far.
 
 ## Development
 
@@ -161,7 +213,7 @@ npm test         # n8n-node build, then node --test test/*.test.js
 npm run dev      # n8n with this node at http://localhost:5678 (in a container from n8n 3.0: Docker or Podman)
 ```
 
-The unit tests mock n8n's request helper; they do not call the Browsa API.
+The unit tests mock n8n's request helper and the trigger's request and response objects; they do not call the Browsa API. The robots API (`/v1/robots`, `/v1/robot-runs`) and the `robot.*` and `task.needs_user` webhook events follow `docs/robots/ROBOTS.md`; check the field names against the live API before publishing 0.2.0.
 
 Publishing goes through GitHub Actions with npm provenance (`.github/workflows/publish.yml`), as n8n requires for verified nodes. See [CONTRIBUTING_UPSTREAM.md](CONTRIBUTING_UPSTREAM.md).
 

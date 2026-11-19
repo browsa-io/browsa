@@ -119,6 +119,10 @@ export interface Job {
   proxyBytes: number;
   /** Credits charged for that data. 0 without one. */
   proxyCredits: number;
+  /** True when the task was created with recordRecipe. */
+  recordRecipe?: boolean;
+  /** The recipe draft recorded from this run (recordRecipe), null until it is stored. */
+  recipeDraftId?: string | null;
   /** Untyped escape hatch for fields not yet promoted to typed surface. */
   raw: Record<string, unknown>;
 }
@@ -243,6 +247,7 @@ export type JobSignal =
   | "llm_error"
   | "llm_fallback_used"
   | "human_input_requested"
+  | "captcha_handoff"
   | "file_produced"
   | "partial_result"
   | "step_error";
@@ -478,6 +483,12 @@ export interface CreateTaskOptions {
   proxy?: Proxy;
   /** A saved proxy instead of `proxy` (not both, and not with a network). */
   proxyId?: string;
+  /**
+   * Record the run as a recipe draft (replays). When the task has finished,
+   * the job has recipeDraftId; createRecipe({ fromJobId }) turns it into a
+   * recipe you can run with runRecipe.
+   */
+  recordRecipe?: boolean;
   /** Pass-through for fields we haven't typed yet. */
   [extra: string]: unknown;
 }
@@ -534,46 +545,24 @@ export interface StreamJobEventsOptions {
   signal?: AbortSignal;
 }
 
-export interface ErrorEnvelope {
-  code?: string;
-  error?: string;
-  message?: string;
-  request_id?: string;
-}
-
-export class BrowsaError extends Error {
-  code?: string;
-  requestId?: string;
-  status?: number;
-  body?: unknown;
-  constructor(message: string, opts: { code?: string; requestId?: string; status?: number; body?: unknown } = {}) {
-    super(message);
-    this.name = "BrowsaError";
-    this.code = opts.code;
-    this.requestId = opts.requestId;
-    this.status = opts.status;
-    this.body = opts.body;
-  }
-}
-/** @deprecated Renamed to BrowsaError. Kept as an alias for backwards compat; will be removed in a future major. */
-export class APIError extends BrowsaError { constructor(...a: ConstructorParameters<typeof BrowsaError>) { super(...a); this.name = "APIError"; } }
-export class AuthError extends BrowsaError { constructor(...a: ConstructorParameters<typeof BrowsaError>) { super(...a); this.name = "AuthError"; } }
-export class RateLimitError extends BrowsaError {
-  retryAfter?: number;
-  constructor(msg: string, opts: ConstructorParameters<typeof BrowsaError>[1] & { retryAfter?: number } = {}) {
-    super(msg, opts);
-    this.name = "RateLimitError";
-    this.retryAfter = opts.retryAfter;
-  }
-}
-export class InvalidIDError extends BrowsaError { constructor(...a: ConstructorParameters<typeof BrowsaError>) { super(...a); this.name = "InvalidIDError"; } }
-export class NotFoundError extends BrowsaError { constructor(...a: ConstructorParameters<typeof BrowsaError>) { super(...a); this.name = "NotFoundError"; } }
-export class TimeoutError extends BrowsaError { constructor(...a: ConstructorParameters<typeof BrowsaError>) { super(...a); this.name = "TimeoutError"; } }
+export { BrowsaError, APIError, AuthError, RateLimitError, InvalidIDError, NotFoundError, TimeoutError } from "./errors";
+export type { ErrorEnvelope } from "./errors";
+export {
+  CaptchaClient, CaptchaError, CaptchaTimeoutError, captchaTasks, normalizeCaptchaTask, captchaProxyString,
+  TwoCaptchaSolver, useWithAntiCaptcha, DEFAULT_CAPTCHA_URL, CAPTCHA_TASK_TYPES,
+} from "./captcha";
+export type {
+  CaptchaClientOptions, CaptchaAnswer, CaptchaTask, CaptchaTaskType, RecognitionTaskType, TokenTaskType, CaptchaProxy,
+  Solved, TokenSolution, TurnstileSolution, TextSolution, GridSolution, AwsWafSolution, SliderSolution, TwoCaptchaAnswer,
+} from "./captcha";
+import { BrowsaError, APIError, AuthError, RateLimitError, InvalidIDError, NotFoundError, TimeoutError } from "./errors";
+import type { ErrorEnvelope } from "./errors";
 
 const DEFAULT_BASE_URL = "https://browsa.io";
 const DEFAULT_TIMEOUT = 30_000;
 const DEFAULT_POLL_MS = 2000;
-export const VERSION = "0.3.1";
+import { VERSION } from "./version";
+export { VERSION };
 const USER_AGENT = `browsa-ts/${VERSION}`;
 
 // Convert the TOP-LEVEL keys of a request body from camelCase to the
@@ -619,6 +608,7 @@ function buildTaskBody(opts: CreateTaskOptions): Record<string, unknown> {
     browserTtlSeconds: "browser_ttl_seconds",
     proxy: "proxy",
     proxyId: "proxy_id",
+    recordRecipe: "record_recipe",
   };
   for (const [src, dst] of Object.entries(map)) {
     const v = (opts as any)[src];
@@ -710,6 +700,9 @@ function snakeToJob(body: Record<string, any>): Job {
     proxyNetwork: typeof body.proxy_network === "string" && body.proxy_network ? body.proxy_network : null,
     proxyBytes: Number(body.proxy_bytes || 0),
     proxyCredits: Number(body.proxy_credits || 0),
+    recordRecipe: body.record_recipe === true ? true : undefined,
+    recipeDraftId: typeof body.recipe_draft_id === "string" ? body.recipe_draft_id
+      : body.record_recipe === true ? null : undefined,
     raw: body,
   };
 }
@@ -992,6 +985,616 @@ export interface ActResult {
   result?: Record<string, any>;
 }
 
+// ── Recipes (replays) ─────────────────────────────────────────────────────
+
+/** How a repaired version is handled: "auto" promotes it once its run passed, "review" keeps it a draft until promoteRecipeVersion, "off" keeps it a draft too. */
+export type RepairMode = "auto" | "review" | "off";
+
+/** A recipe: a versioned JSON program recorded from a task run or uploaded. */
+export interface Recipe {
+  id: string;
+  name: string;
+  /** "draft" (recorded, not created yet) or "active". */
+  status: "draft" | "active" | string;
+  /** The version runRecipe uses; null for a draft. */
+  currentVersion: number | null;
+  repairMode: RepairMode | string;
+  /**
+   * Credits one successful run costs: the same as the job run as an agent
+   * task (the recorded task's charge, or the hosted-tier task price for an
+   * uploaded recipe). Fixed; failed runs cost nothing.
+   */
+  priceCredits: number;
+  /** The task run it was recorded from. */
+  sourceJobId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  /** The body of the current version (getRecipe, createRecipe). */
+  recipe?: Record<string, unknown>;
+  raw: Record<string, unknown>;
+}
+
+export interface RecipeVersion {
+  version: number;
+  /** "draft", "active" or "retired". */
+  status: string;
+  /** When the version passed a run end to end; only verified versions can be promoted. */
+  verifiedAt: string | null;
+  promotedAt: string | null;
+  createdAt?: string;
+  createdFromJob?: string;
+  createdFromRun?: string;
+  recipe?: Record<string, unknown>;
+  raw: Record<string, unknown>;
+}
+
+/** Typed failures of a run. */
+export type RecipeRunErrorCode =
+  | "blocked" | "needs_login" | "site_changed" | "invalid_output" | "params_invalid" | "timeout" | "failed" | "cancelled";
+
+export interface RecipeRun {
+  id: string;
+  /** The agents job behind the run (same id); cancelJob works on it. */
+  jobId: string;
+  recipeId: string | null;
+  version: number;
+  /** "queued", "running", "ok", "failed" or "cancelled". */
+  status: "queued" | "running" | "ok" | "failed" | "cancelled" | string;
+  params: Record<string, unknown> | null;
+  /** The output, checked against the recipe's output schema. */
+  output: unknown;
+  errorCode: RecipeRunErrorCode | string | null;
+  errorMessage: string | null;
+  /** The per step trace the replay worker reported. */
+  layers: unknown;
+  /** Step id to the layer it ran on (1 in-page network, 2 DOM, 3 repair), when the trace says. */
+  layerUsed: Record<string, number> | null;
+  repaired: boolean;
+  repairedSteps: string[];
+  /** The version a repair stored, null when none. */
+  newVersion: number | null;
+  durationMs: number | null;
+  /** The recipe's price when the run was queued. */
+  priceCredits: number;
+  /** What the run charged: priceCredits when it succeeded, 0 when it failed or was cancelled. */
+  credits: number;
+  createdAt?: string;
+  finishedAt: string | null;
+  raw: Record<string, unknown>;
+}
+
+export interface CreateRecipeOptions {
+  /** A task run made with recordRecipe: true. */
+  fromJobId?: string;
+  /** A recipe JSON to upload (services/replay/recipe.schema.json). */
+  recipe?: Record<string, unknown>;
+  /** Lowercase letters, digits and dashes. */
+  name?: string;
+  /** JSON Schema of the run params; replaces the recorded one. */
+  params?: Record<string, unknown>;
+  /** JSON Schema of the output; replaces the recorded one. */
+  output?: Record<string, unknown>;
+  repairMode?: RepairMode;
+}
+
+export interface RunRecipeOptions {
+  /** Checked against the recipe's params schema (400 PARAMS_INVALID). */
+  params?: Record<string, unknown>;
+  /** Seconds (up to 60) to wait for the run to finish before answering. */
+  wait?: number;
+  /** An https URL that gets recipe.run.completed or recipe.failed for this run. */
+  webhookUrl?: string;
+  /** Where the browser leaves from; the recipe's exit when omitted. */
+  proxy?: { network?: "auto" | "datacenter" | "residential" | "default"; country?: string };
+  /** Run on a saved identity of this workspace. */
+  profileId?: string;
+  /** Let steps marked mutation (add to cart, submit) run. Off by default. */
+  allowMutations?: boolean;
+}
+
+function snakeToRecipe(b: Record<string, any>): Recipe {
+  return {
+    id: b.id || "",
+    name: b.name || "",
+    status: b.status || "",
+    currentVersion: typeof b.current_version === "number" ? b.current_version : null,
+    repairMode: b.repair_mode || "",
+    priceCredits: num(b.price_credits),
+    sourceJobId: typeof b.source_job_id === "string" ? b.source_job_id : undefined,
+    createdAt: b.created_at,
+    updatedAt: b.updated_at,
+    recipe: b.recipe && typeof b.recipe === "object" ? b.recipe : undefined,
+    raw: b,
+  };
+}
+
+function snakeToRecipeVersion(b: Record<string, any>): RecipeVersion {
+  return {
+    version: Number(b.version || 0),
+    status: b.status || "",
+    verifiedAt: b.verified_at ?? null,
+    promotedAt: b.promoted_at ?? null,
+    createdAt: b.created_at,
+    createdFromJob: b.created_from_job,
+    createdFromRun: b.created_from_run,
+    recipe: b.recipe && typeof b.recipe === "object" ? b.recipe : undefined,
+    raw: b,
+  };
+}
+
+function snakeToRecipeRun(b: Record<string, any>): RecipeRun {
+  return {
+    id: b.id || "",
+    jobId: b.job_id || b.id || "",
+    recipeId: typeof b.recipe_id === "string" ? b.recipe_id : null,
+    version: Number(b.version || 0),
+    status: b.status || "",
+    params: b.params && typeof b.params === "object" ? b.params : null,
+    output: b.output ?? null,
+    errorCode: b.error_code ?? null,
+    errorMessage: b.error_message ?? null,
+    layers: b.layers ?? null,
+    layerUsed: b.layer_used && typeof b.layer_used === "object" ? b.layer_used : null,
+    repaired: !!b.repaired,
+    repairedSteps: Array.isArray(b.repaired_steps) ? b.repaired_steps : [],
+    newVersion: typeof b.new_version === "number" ? b.new_version : null,
+    durationMs: typeof b.duration_ms === "number" ? b.duration_ms : null,
+    priceCredits: num(b.price_credits),
+    credits: num(b.credits),
+    createdAt: b.created_at,
+    finishedAt: b.finished_at ?? null,
+    raw: b,
+  };
+}
+
+// ── Robots ────────────────────────────────────────────────────────────────
+
+/**
+ * Robot settings. Each part is optional; a missing or null part is Auto.
+ * Replays use no model: `model` records the robot (and re-records it when
+ * the site changed). Language and timezone follow the exit.
+ */
+export interface RobotSettings {
+  /** A hosted tier ("browsa", "browsa-fast", "browsa-smart"), or a model of a saved key (llmKeyId). */
+  model?: { llm: string; llmKeyId?: string } | null;
+  /**
+   * Browsa's proxy network ("datacenter" 5 credits/GB, "residential" 50
+   * credits/GB, optional country), or a saved proxy of yours (proxyId, free).
+   */
+  proxy?: { network?: "datacenter" | "residential"; country?: string; proxyId?: string } | null;
+  /** Phantom's operating system and a desktop screen size such as "1920x1080". */
+  browser?: { os?: "mac" | "windows" | "linux"; screen?: string } | null;
+}
+
+/** When a robot runs on its own. `at` ("09:00"), `weekday` (0 Sunday) and `tz` apply to daily and weekly intervals. */
+export interface RobotSchedule {
+  intervalSeconds: number;
+  at?: string;
+  weekday?: number;
+  tz?: string;
+}
+
+/** Where results go after a run. Webhooks are signed with X-Agents-Signature. */
+export type RobotDestination =
+  | { type: "webhook"; url: string; secretRef?: string }
+  | { type: "email"; to: string };
+
+/** Watch one output field on every row. `lt`, `gt` and `eq` take a value. */
+export interface RobotMonitor {
+  field: string;
+  op: "changed" | "lt" | "gt" | "eq" | "in_stock_changed";
+  value?: unknown;
+}
+
+export interface RobotHealth {
+  /** Share of rows that passed over the last 20 runs, 0 to 1; null before any run. */
+  passRate: number | null;
+  rowsCounted: number;
+  lastFailure: string | null;
+  lastFailureAt: string | null;
+  recipeVersion: number | null;
+  versions: number;
+  repairs: number;
+  /** Credits one successful row costs (the recipe's price). Failed rows are free. */
+  priceCredits: number;
+  nextRunAt: string | null;
+  scheduleActive: boolean;
+  site: string | null;
+  raw: Record<string, unknown>;
+}
+
+/** "queued", "running", "completed", "partial" or "failed". */
+export type RobotRunStatus = "queued" | "running" | "completed" | "partial" | "failed";
+
+export const ROBOT_RUN_TERMINAL: string[] = ["completed", "partial", "failed"];
+
+export interface RobotRunRow {
+  row: number;
+  input: Record<string, unknown> | null;
+  /** "ok", "failed" or a pending state. */
+  status: string;
+  output: unknown;
+  errorCode: string | null;
+  errorMessage: string | null;
+  credits: number;
+  recipeRunId: string | null;
+  durationMs: number | null;
+  alerts: RobotAlert[];
+  changedFields: string[];
+}
+
+export interface RobotRun {
+  id: string;
+  robotId: string;
+  /** "manual", "schedule" or "api". */
+  trigger: string;
+  status: RobotRunStatus | string;
+  rowsTotal: number;
+  rowsOk: number;
+  rowsFailed: number;
+  rowsPending: number;
+  /** What the run charged: the recipe's price per successful row. */
+  credits: number;
+  site: string | null;
+  stopReason: string | null;
+  createdAt?: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  /** Rows with output (robotRuns.get only). */
+  rows?: RobotRunRow[];
+  raw: Record<string, unknown>;
+}
+
+export interface RobotAlert {
+  id: string;
+  robotId: string;
+  robotRunId: string;
+  row: number;
+  field: string;
+  rule: string;
+  old: unknown;
+  new: unknown;
+  createdAt?: string;
+  raw: Record<string, unknown>;
+}
+
+export interface Robot {
+  id: string;
+  name: string;
+  description: string;
+  recipeId: string | null;
+  /** "active" or "paused". */
+  status: "active" | "paused" | string;
+  pausedReason: string | null;
+  profileId: string | null;
+  inputs: Record<string, unknown>[];
+  destinations: RobotDestination[];
+  monitors: RobotMonitor[];
+  schedule: (RobotSchedule & { id: string; enabled: boolean; nextRunAt: string | null }) | null;
+  /** model, proxy and browser; each null when Auto. */
+  settings: RobotSettings;
+  sourceJobId: string | null;
+  health: RobotHealth | null;
+  alertsUnread: number;
+  lastRun: RobotRun | null;
+  createdAt?: string;
+  updatedAt?: string;
+  raw: Record<string, unknown>;
+}
+
+export interface CreateRobotOptions {
+  name: string;
+  /** A finished task run made with recordRecipe: true. */
+  fromJobId?: string;
+  /** Or an existing recipe. */
+  recipeId?: string;
+  description?: string;
+  /** One object per row, up to 500. One run covers every row. */
+  inputs?: Record<string, unknown>[];
+  schedule?: RobotSchedule;
+  destinations?: RobotDestination[];
+  monitors?: RobotMonitor[];
+  /** Run on a saved identity of this workspace. */
+  profileId?: string;
+  settings?: RobotSettings;
+}
+
+/** Fields left out stay as they are; null clears schedule, profileId and settings (Auto). */
+export interface UpdateRobotOptions {
+  name?: string;
+  description?: string;
+  inputs?: Record<string, unknown>[];
+  schedule?: RobotSchedule | null;
+  destinations?: RobotDestination[];
+  monitors?: RobotMonitor[];
+  profileId?: string | null;
+  /** Replaces all settings; null is Auto. */
+  settings?: RobotSettings | null;
+  /** Re-record from a new task run. */
+  fromJobId?: string;
+  /** Switch to another recipe (for example back to the previous one). */
+  recipeId?: string;
+}
+
+type RequestFn = <T = unknown>(
+  method: string,
+  path: string,
+  opts?: { body?: unknown; query?: Record<string, unknown>; timeoutMs?: number },
+) => Promise<T>;
+
+const strOrNull = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+
+function robotSettingsToWire(s: RobotSettings | null | undefined): Record<string, unknown> | null | undefined {
+  if (s === undefined) return undefined;
+  if (s === null) return null;
+  const out: Record<string, unknown> = {};
+  if (s.model) out.model = { llm: s.model.llm, llm_key_id: s.model.llmKeyId };
+  if (s.proxy) out.proxy = { network: s.proxy.network, country: s.proxy.country, proxy_id: s.proxy.proxyId };
+  if (s.browser) out.browser = { os: s.browser.os, screen: s.browser.screen };
+  return out;
+}
+
+function robotSettingsFromWire(b: any): RobotSettings {
+  const out: RobotSettings = { model: null, proxy: null, browser: null };
+  if (!b || typeof b !== "object") return out;
+  if (b.model) out.model = { llm: b.model.llm || "", ...(b.model.llm_key_id ? { llmKeyId: b.model.llm_key_id } : {}) };
+  if (b.proxy) {
+    out.proxy = {
+      ...(b.proxy.network ? { network: b.proxy.network } : {}),
+      ...(b.proxy.country ? { country: b.proxy.country } : {}),
+      ...(b.proxy.proxy_id ? { proxyId: b.proxy.proxy_id } : {}),
+    };
+  }
+  if (b.browser) {
+    out.browser = { ...(b.browser.os ? { os: b.browser.os } : {}), ...(b.browser.screen ? { screen: b.browser.screen } : {}) };
+  }
+  return out;
+}
+
+function scheduleToWire(s: RobotSchedule | null | undefined): Record<string, unknown> | null | undefined {
+  if (s === undefined || s === null) return s;
+  return { interval_seconds: s.intervalSeconds, at: s.at, weekday: s.weekday, tz: s.tz };
+}
+
+function destinationsToWire(d: RobotDestination[] | undefined): unknown {
+  if (d === undefined) return undefined;
+  return d.map((x: any) => (x.type === "webhook" ? { type: "webhook", url: x.url, secret_ref: x.secretRef } : x));
+}
+
+function snakeToRobotAlert(b: Record<string, any>): RobotAlert {
+  return {
+    id: b.id || "",
+    robotId: b.robot_id || "",
+    robotRunId: b.robot_run_id || "",
+    row: num(b.row),
+    field: b.field || "",
+    rule: b.rule || "",
+    old: b.old ?? null,
+    new: b.new ?? null,
+    createdAt: b.created_at,
+    raw: b,
+  };
+}
+
+function snakeToRobotRun(b: Record<string, any>): RobotRun {
+  const run: RobotRun = {
+    id: b.id || "",
+    robotId: b.robot_id || "",
+    trigger: b.trigger || "",
+    status: b.status || "",
+    rowsTotal: num(b.rows_total),
+    rowsOk: num(b.rows_ok),
+    rowsFailed: num(b.rows_failed),
+    rowsPending: num(b.rows_pending),
+    credits: num(b.credits),
+    site: strOrNull(b.site),
+    stopReason: strOrNull(b.stop_reason),
+    createdAt: b.created_at,
+    startedAt: b.started_at ?? null,
+    finishedAt: b.finished_at ?? null,
+    raw: b,
+  };
+  if (Array.isArray(b.rows)) {
+    run.rows = b.rows.map((r: Record<string, any>) => ({
+      row: num(r.row),
+      input: r.input && typeof r.input === "object" ? r.input : null,
+      status: r.status || "",
+      output: r.output ?? null,
+      errorCode: r.error_code ?? null,
+      errorMessage: r.error_message ?? null,
+      credits: num(r.credits),
+      recipeRunId: strOrNull(r.recipe_run_id),
+      durationMs: typeof r.duration_ms === "number" ? r.duration_ms : null,
+      alerts: Array.isArray(r.alerts) ? r.alerts.map(snakeToRobotAlert) : [],
+      changedFields: Array.isArray(r.changed_fields) ? r.changed_fields : [],
+    }));
+  }
+  return run;
+}
+
+function snakeToRobot(b: Record<string, any>): Robot {
+  const h = b.health && typeof b.health === "object" ? b.health : null;
+  const s = b.schedule && typeof b.schedule === "object" ? b.schedule : null;
+  return {
+    id: b.id || "",
+    name: b.name || "",
+    description: b.description || "",
+    recipeId: strOrNull(b.recipe_id),
+    status: b.status || "",
+    pausedReason: strOrNull(b.paused_reason),
+    profileId: strOrNull(b.profile_id),
+    inputs: Array.isArray(b.inputs) ? b.inputs : [],
+    destinations: Array.isArray(b.destinations)
+      ? b.destinations.map((d: any) => (d && d.secret_ref ? { ...d, secretRef: d.secret_ref } : d))
+      : [],
+    monitors: Array.isArray(b.monitors) ? b.monitors : [],
+    schedule: s
+      ? {
+          id: s.id || "",
+          intervalSeconds: num(s.interval_seconds),
+          enabled: !!s.enabled,
+          nextRunAt: s.next_run_at ?? null,
+          ...(s.at ? { at: s.at } : {}),
+          ...(typeof s.weekday === "number" ? { weekday: s.weekday } : {}),
+          ...(s.tz ? { tz: s.tz } : {}),
+        }
+      : null,
+    settings: robotSettingsFromWire(b.settings),
+    sourceJobId: strOrNull(b.source_job_id),
+    health: h
+      ? {
+          passRate: typeof h.pass_rate === "number" ? h.pass_rate : null,
+          rowsCounted: num(h.rows_counted),
+          lastFailure: strOrNull(h.last_failure),
+          lastFailureAt: h.last_failure_at ?? null,
+          recipeVersion: typeof h.recipe_version === "number" ? h.recipe_version : null,
+          versions: num(h.versions),
+          repairs: num(h.repairs),
+          priceCredits: num(h.price_credits),
+          nextRunAt: h.next_run_at ?? null,
+          scheduleActive: !!h.schedule_active,
+          site: strOrNull(h.site),
+          raw: h,
+        }
+      : null,
+    alertsUnread: num(b.alerts_unread),
+    lastRun: b.last_run && typeof b.last_run === "object" ? snakeToRobotRun(b.last_run) : null,
+    createdAt: b.created_at,
+    updatedAt: b.updated_at,
+    raw: b,
+  };
+}
+
+/** client.robots: saved browser jobs over recipes. A row costs the recipe's priceCredits; failed rows are free. */
+export class Robots {
+  constructor(private readonly req: RequestFn) {}
+
+  private path(id: string, rest = ""): string {
+    return `/v1/robots/${encodeURIComponent(id)}${rest}`;
+  }
+
+  /** POST /v1/robots from a recorded task run (fromJobId) or a recipe (recipeId). */
+  async create(opts: CreateRobotOptions): Promise<Robot> {
+    const body = {
+      name: opts.name,
+      from_job_id: opts.fromJobId,
+      recipe_id: opts.recipeId,
+      description: opts.description,
+      inputs: opts.inputs,
+      schedule: scheduleToWire(opts.schedule),
+      destinations: destinationsToWire(opts.destinations),
+      monitors: opts.monitors,
+      profile_id: opts.profileId,
+      settings: robotSettingsToWire(opts.settings),
+    };
+    return snakeToRobot(await this.req<Record<string, any>>("POST", "/v1/robots", { body }));
+  }
+
+  /** GET /v1/robots, newest first. */
+  async list(opts: { limit?: number } = {}): Promise<Robot[]> {
+    const r = await this.req<{ robots?: any[] }>("GET", "/v1/robots", { query: { limit: opts.limit } });
+    return (r.robots ?? []).map(snakeToRobot);
+  }
+
+  /** GET /v1/robots/:id with health and the last run. */
+  async get(id: string): Promise<Robot> {
+    return snakeToRobot(await this.req<Record<string, any>>("GET", this.path(id)));
+  }
+
+  /** PATCH /v1/robots/:id. Only the fields you pass change. */
+  async update(id: string, opts: UpdateRobotOptions): Promise<Robot> {
+    const body: Record<string, unknown> = {};
+    const set = (k: string, v: unknown) => { if (v !== undefined) body[k] = v; };
+    set("name", opts.name);
+    set("description", opts.description);
+    set("inputs", opts.inputs);
+    set("schedule", scheduleToWire(opts.schedule));
+    set("destinations", destinationsToWire(opts.destinations));
+    set("monitors", opts.monitors);
+    set("profile_id", opts.profileId);
+    set("settings", robotSettingsToWire(opts.settings));
+    set("from_job_id", opts.fromJobId);
+    set("recipe_id", opts.recipeId);
+    return snakeToRobot(await this.req<Record<string, any>>("PATCH", this.path(id), { body }));
+  }
+
+  /** DELETE /v1/robots/:id. Past runs stay billed history. */
+  async delete(id: string): Promise<void> {
+    await this.req("DELETE", this.path(id));
+  }
+
+  /** POST /v1/robots/:id/run. `inputs` replaces the saved rows for this run only. Returns the queued run. */
+  async run(id: string, opts: { inputs?: Record<string, unknown>[] } = {}): Promise<RobotRun> {
+    const body = opts.inputs ? { inputs: opts.inputs } : {};
+    return snakeToRobotRun(await this.req<Record<string, any>>("POST", this.path(id, "/run"), { body }));
+  }
+
+  async pause(id: string): Promise<Robot> {
+    return snakeToRobot(await this.req<Record<string, any>>("POST", this.path(id, "/pause")));
+  }
+
+  async resume(id: string): Promise<Robot> {
+    return snakeToRobot(await this.req<Record<string, any>>("POST", this.path(id, "/resume")));
+  }
+
+  /** GET /v1/robots/:id/runs, newest first (no rows; robotRuns.get has them). */
+  async runs(id: string, opts: { limit?: number } = {}): Promise<RobotRun[]> {
+    const r = await this.req<{ runs?: any[] }>("GET", this.path(id, "/runs"), { query: { limit: opts.limit } });
+    return (r.runs ?? []).map(snakeToRobotRun);
+  }
+
+  /** GET /v1/robots/:id/alerts: what the monitors caught, newest first. */
+  async alerts(id: string, opts: { limit?: number } = {}): Promise<RobotAlert[]> {
+    const r = await this.req<{ alerts?: any[] }>("GET", this.path(id, "/alerts"), { query: { limit: opts.limit } });
+    return (r.alerts ?? []).map(snakeToRobotAlert);
+  }
+
+  /** POST /v1/robots/:id/alerts/read: alertsUnread goes to 0. */
+  async markAlertsRead(id: string): Promise<void> {
+    await this.req("POST", this.path(id, "/alerts/read"));
+  }
+}
+
+/** client.robotRuns: one run of a robot, with a row per input. */
+export class RobotRuns {
+  constructor(private readonly req: RequestFn) {}
+
+  /** GET /v1/robot-runs/:id with rows. */
+  async get(id: string): Promise<RobotRun> {
+    return snakeToRobotRun(await this.req<Record<string, any>>("GET", `/v1/robot-runs/${encodeURIComponent(id)}`));
+  }
+
+  /** Polls get() until the run is completed, partial or failed. */
+  async wait(id: string, opts: { timeoutMs?: number; pollMs?: number } = {}): Promise<RobotRun> {
+    const deadline = Date.now() + (opts.timeoutMs ?? 600_000);
+    const poll = opts.pollMs ?? 3_000;
+    for (;;) {
+      const run = await this.get(id);
+      if (ROBOT_RUN_TERMINAL.includes(run.status)) return run;
+      if (Date.now() + poll > deadline) {
+        throw new TimeoutError(`robot run ${id} still ${run.status} after ${opts.timeoutMs ?? 600_000}ms`);
+      }
+      await new Promise((r) => setTimeout(r, poll));
+    }
+  }
+
+  /**
+   * GET /v1/robot-runs/:id/export. CSV (default) comes back as text, one
+   * line per row; JSON as an object with `rows`. `items` caps list items per
+   * CSV cell (default 5, up to 50).
+   */
+  async export(id: string, opts: { format: "json"; items?: number }): Promise<Record<string, any>>;
+  async export(id: string, opts?: { format?: "csv"; items?: number }): Promise<string>;
+  async export(id: string, opts: { format?: "csv" | "json"; items?: number } = {}): Promise<string | Record<string, any>> {
+    const format = opts.format ?? "csv";
+    const r = await this.req<unknown>("GET", `/v1/robot-runs/${encodeURIComponent(id)}/export`, {
+      query: { format, items: opts.items },
+    });
+    if (format === "json" && typeof r === "string") return JSON.parse(r);
+    return r as string | Record<string, any>;
+  }
+}
+
 export class Client {
   private apiKey: string;
   private baseUrl: string;
@@ -999,6 +1602,10 @@ export class Client {
   private fetchImpl: typeof globalThis.fetch;
   /** View sessions seen by observe()/act(): agent id -> last tab and tab -> session. */
   private pageSessions = new Map<string, { last: string; tabs: Map<string, string> }>();
+  /** Robots: saved browser jobs you run on demand, on a schedule or from the API. */
+  readonly robots: Robots;
+  /** One run of a robot: rows, wait, export. */
+  readonly robotRuns: RobotRuns;
 
   constructor(opts: ClientOptions) {
     if (!opts.apiKey || !opts.apiKey.startsWith("agt_")) {
@@ -1011,6 +1618,9 @@ export class Client {
     if (!this.fetchImpl) {
       throw new Error("Global fetch is missing. Node 18+ required, or pass `fetch` in options.");
     }
+    const req: RequestFn = (method, path, o) => this.request(method, path, o);
+    this.robots = new Robots(req);
+    this.robotRuns = new RobotRuns(req);
   }
 
   private async request<T = unknown>(
@@ -1324,6 +1934,112 @@ export class Client {
   /** DELETE /v1/schedules/:id. */
   async deleteSchedule(id: string): Promise<void> {
     await this.request("DELETE", `/v1/schedules/${encodeURIComponent(id)}`);
+  }
+
+  // ── Recipes (replays) ──────────────────────────────────────────────────
+
+  /**
+   * POST /v1/recipes: a recipe from a task run recorded with recordRecipe
+   * (`fromJobId`) or from a recipe JSON (`recipe`). Version 1 is active.
+   */
+  async createRecipe(opts: CreateRecipeOptions): Promise<Recipe> {
+    const body: Record<string, unknown> = {
+      from_job_id: opts.fromJobId,
+      recipe: opts.recipe,
+      name: opts.name,
+      params: opts.params,
+      output: opts.output,
+      repair_mode: opts.repairMode,
+    };
+    for (const k of Object.keys(body)) if (body[k] == null) delete body[k];
+    const r = await this.request<Record<string, any>>("POST", "/v1/recipes", { body });
+    return snakeToRecipe(r);
+  }
+
+  /** GET /v1/recipes: this workspace's recipes, newest first. */
+  async listRecipes(opts: { limit?: number } = {}): Promise<Recipe[]> {
+    const r = await this.request<{ recipes?: any[] }>("GET", "/v1/recipes", { query: { limit: opts.limit } });
+    return (r.recipes ?? []).map(snakeToRecipe);
+  }
+
+  /** GET /v1/recipes/:id, with the body of the current version. */
+  async getRecipe(id: string): Promise<Recipe> {
+    const r = await this.request<Record<string, any>>("GET", `/v1/recipes/${encodeURIComponent(id)}`);
+    return snakeToRecipe(r);
+  }
+
+  /** PATCH /v1/recipes/:id: rename, or change repairMode. */
+  async updateRecipe(id: string, opts: { name?: string; repairMode?: RepairMode }): Promise<Recipe> {
+    const body: Record<string, unknown> = {};
+    if (opts.name != null) body.name = opts.name;
+    if (opts.repairMode != null) body.repair_mode = opts.repairMode;
+    const r = await this.request<Record<string, any>>("PATCH", `/v1/recipes/${encodeURIComponent(id)}`, { body });
+    return snakeToRecipe(r);
+  }
+
+  /** GET /v1/recipes/:id/versions, newest first. `includeRecipe` adds each body. */
+  async listRecipeVersions(id: string, opts: { includeRecipe?: boolean } = {}): Promise<RecipeVersion[]> {
+    const r = await this.request<{ versions?: any[] }>("GET", `/v1/recipes/${encodeURIComponent(id)}/versions`, {
+      query: opts.includeRecipe ? { include: "recipe" } : undefined,
+    });
+    return (r.versions ?? []).map(snakeToRecipeVersion);
+  }
+
+  /** POST /v1/recipes/:id/versions/:version/promote: make a verified version the one runs use. */
+  async promoteRecipeVersion(id: string, version: number): Promise<Recipe> {
+    const r = await this.request<Record<string, any>>(
+      "POST", `/v1/recipes/${encodeURIComponent(id)}/versions/${encodeURIComponent(String(version))}/promote`);
+    return snakeToRecipe(r);
+  }
+
+  /** POST /v1/recipes/:id/rollback: back to the previous active version, or to `version`. */
+  async rollbackRecipe(id: string, opts: { version?: number } = {}): Promise<Recipe> {
+    const r = await this.request<Record<string, any>>("POST", `/v1/recipes/${encodeURIComponent(id)}/rollback`, {
+      body: opts.version != null ? { version: opts.version } : {},
+    });
+    return snakeToRecipe(r);
+  }
+
+  /** DELETE /v1/recipes/:id. Its runs stay readable. */
+  async deleteRecipe(id: string): Promise<void> {
+    await this.request("DELETE", `/v1/recipes/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * POST /v1/recipes/:id/run. With `wait` (seconds, up to 60) the call
+   * returns the finished run when it ends in time; otherwise the queued run
+   * (poll getRecipeRun). A successful run costs the recipe's priceCredits;
+   * failed runs cost nothing.
+   */
+  async runRecipe(id: string, opts: RunRecipeOptions = {}): Promise<RecipeRun> {
+    const body: Record<string, unknown> = { params: opts.params ?? {} };
+    if (opts.wait != null) body.wait = opts.wait;
+    if (opts.webhookUrl != null) body.webhook_url = opts.webhookUrl;
+    if (opts.proxy != null) body.proxy = opts.proxy;
+    if (opts.profileId != null) body.profile_id = opts.profileId;
+    if (opts.allowMutations) body.allow_mutations = true;
+    const wait = Math.min(Math.max(opts.wait ?? 0, 0), 60);
+    const r = await this.request<Record<string, any>>("POST", `/v1/recipes/${encodeURIComponent(id)}/run`, {
+      body,
+      timeoutMs: wait > 0 ? (wait + 10) * 1000 : undefined,
+    });
+    return snakeToRecipeRun(r);
+  }
+
+  /** GET /v1/recipe-runs/:id. `wait` (seconds, up to 60) holds the answer until the run ends. */
+  async getRecipeRun(runId: string, opts: { wait?: number } = {}): Promise<RecipeRun> {
+    const wait = Math.min(Math.max(opts.wait ?? 0, 0), 60);
+    const r = await this.request<Record<string, any>>("GET", `/v1/recipe-runs/${encodeURIComponent(runId)}`, {
+      query: wait > 0 ? { wait } : undefined,
+      timeoutMs: wait > 0 ? (wait + 10) * 1000 : undefined,
+    });
+    return snakeToRecipeRun(r);
+  }
+
+  /** POST /v1/recipe-runs/:id/cancel: cancel a queued or running run (the job cancel path). */
+  async cancelRecipeRun(runId: string): Promise<RecipeRun> {
+    const r = await this.request<Record<string, any>>("POST", `/v1/recipe-runs/${encodeURIComponent(runId)}/cancel`);
+    return snakeToRecipeRun(r);
   }
 
   // ── Webhooks ───────────────────────────────────────────────────────────

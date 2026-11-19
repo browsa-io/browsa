@@ -6,6 +6,7 @@ The raw dict is always available on `.raw` for fields we haven't typed.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
+from dataclasses import field as dataclass_field
 from typing import Any, Optional, TypedDict, Union
 
 
@@ -136,6 +137,10 @@ class Job:
     proxy_network: Optional[str] = None
     proxy_bytes: int = 0
     proxy_credits: int = 0
+    # Replays: True when the task was created with record_recipe; the recipe
+    # draft recorded from the run, None until it is stored.
+    record_recipe: bool = False
+    recipe_draft_id: Optional[str] = None
     raw: dict = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -187,6 +192,8 @@ class Job:
             proxy_network=body.get("proxy_network") or None,
             proxy_bytes=int(body.get("proxy_bytes") or 0),
             proxy_credits=int(body.get("proxy_credits") or 0),
+            record_recipe=body.get("record_recipe") is True,
+            recipe_draft_id=body.get("recipe_draft_id") or None,
             raw=body,
         )
 
@@ -599,3 +606,350 @@ class ProxyNetwork:
             if t.network == network:
                 return t
         return None
+
+
+# ─── Recipes (replays) ──────────────────────────────────────────────────
+
+
+@dataclass
+class Recipe:
+    """A recipe: a versioned JSON program recorded from a task run or uploaded."""
+    id: str
+    name: str
+    status: str  # "draft" or "active"
+    current_version: Optional[int] = None
+    repair_mode: str = "auto"
+    # Credits one successful run costs: the same as the job run as an agent
+    # task. Fixed; failed runs cost nothing.
+    price_credits: int = 0
+    source_job_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    # Body of the current version (get_recipe, create_recipe).
+    recipe: Optional[dict] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "Recipe":
+        cv = body.get("current_version")
+        return cls(
+            id=body.get("id") or "",
+            name=body.get("name") or "",
+            status=body.get("status") or "",
+            current_version=int(cv) if isinstance(cv, (int, float)) else None,
+            repair_mode=body.get("repair_mode") or "",
+            price_credits=int(body.get("price_credits") or 0),
+            source_job_id=body.get("source_job_id"),
+            created_at=body.get("created_at"),
+            updated_at=body.get("updated_at"),
+            recipe=body.get("recipe") if isinstance(body.get("recipe"), dict) else None,
+            raw=body,
+        )
+
+
+@dataclass
+class RecipeVersion:
+    """One version of a recipe. Only verified versions can be promoted."""
+    version: int
+    status: str  # "draft", "active" or "retired"
+    verified_at: Optional[str] = None
+    promoted_at: Optional[str] = None
+    created_at: Optional[str] = None
+    created_from_job: Optional[str] = None
+    created_from_run: Optional[str] = None
+    recipe: Optional[dict] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "RecipeVersion":
+        return cls(
+            version=int(body.get("version") or 0),
+            status=body.get("status") or "",
+            verified_at=body.get("verified_at"),
+            promoted_at=body.get("promoted_at"),
+            created_at=body.get("created_at"),
+            created_from_job=body.get("created_from_job"),
+            created_from_run=body.get("created_from_run"),
+            recipe=body.get("recipe") if isinstance(body.get("recipe"), dict) else None,
+            raw=body,
+        )
+
+
+@dataclass
+class RecipeRun:
+    """One run of a recipe (GET /v1/recipe-runs/:id).
+
+    status: "queued", "running", "ok", "failed" or "cancelled". A failed run
+    has a typed error_code: blocked, needs_login, site_changed,
+    invalid_output, params_invalid or timeout, and costs nothing. A
+    successful run costs the recipe's price_credits.
+    """
+    id: str
+    status: str
+    job_id: str = ""
+    recipe_id: Optional[str] = None
+    version: int = 0
+    params: Optional[dict] = None
+    output: Any = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    layers: Any = None
+    # step id -> layer it ran on (1 in-page network, 2 DOM, 3 repair).
+    layer_used: Optional[dict] = None
+    repaired: bool = False
+    repaired_steps: list = field(default_factory=list)
+    new_version: Optional[int] = None
+    duration_ms: Optional[int] = None
+    # The recipe's price when queued; credits is what the run charged (the
+    # price when it succeeded, 0 when it failed or was cancelled).
+    price_credits: int = 0
+    credits: int = 0
+    created_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @property
+    def done(self) -> bool:
+        return self.status in ("ok", "failed", "cancelled")
+
+    @classmethod
+    def from_response(cls, body: dict) -> "RecipeRun":
+        nv = body.get("new_version")
+        dm = body.get("duration_ms")
+        return cls(
+            id=body.get("id") or "",
+            status=body.get("status") or "",
+            job_id=body.get("job_id") or body.get("id") or "",
+            recipe_id=body.get("recipe_id"),
+            version=int(body.get("version") or 0),
+            params=body.get("params") if isinstance(body.get("params"), dict) else None,
+            output=body.get("output"),
+            error_code=body.get("error_code"),
+            error_message=body.get("error_message"),
+            layers=body.get("layers"),
+            layer_used=body.get("layer_used") if isinstance(body.get("layer_used"), dict) else None,
+            repaired=bool(body.get("repaired")),
+            repaired_steps=list(body.get("repaired_steps") or []),
+            new_version=int(nv) if isinstance(nv, (int, float)) else None,
+            duration_ms=int(dm) if isinstance(dm, (int, float)) else None,
+            price_credits=int(body.get("price_credits") or 0),
+            credits=int(body.get("credits") or 0),
+            created_at=body.get("created_at"),
+            finished_at=body.get("finished_at"),
+            raw=body,
+        )
+
+
+# ── Robots ────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class RobotHealth:
+    """A robot's health: pass rate over the last 20 rows (0 to 1, None
+    before any run) and price_credits, what one successful row costs (the
+    recipe's price). Failed rows are free."""
+    pass_rate: Optional[float] = None
+    rows_counted: int = 0
+    last_failure: Optional[str] = None
+    last_failure_at: Optional[str] = None
+    recipe_version: Optional[int] = None
+    versions: int = 0
+    repairs: int = 0
+    price_credits: int = 0
+    next_run_at: Optional[str] = None
+    schedule_active: bool = False
+    site: Optional[str] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "RobotHealth":
+        return cls(
+            pass_rate=_opt_float(body.get("pass_rate")),
+            rows_counted=int(body.get("rows_counted") or 0),
+            last_failure=_opt_str(body.get("last_failure")),
+            last_failure_at=body.get("last_failure_at"),
+            recipe_version=_opt_int(body.get("recipe_version")),
+            versions=int(body.get("versions") or 0),
+            repairs=int(body.get("repairs") or 0),
+            price_credits=int(body.get("price_credits") or 0),
+            next_run_at=body.get("next_run_at"),
+            schedule_active=bool(body.get("schedule_active")),
+            site=_opt_str(body.get("site")),
+            raw=body,
+        )
+
+
+@dataclass
+class RobotAlert:
+    """A monitor hit: ``field`` moved from ``old`` to ``new`` on one row."""
+    id: str
+    robot_id: str = ""
+    robot_run_id: str = ""
+    row: int = 0
+    field: str = ""
+    rule: str = ""
+    old: Any = None
+    new: Any = None
+    created_at: Optional[str] = None
+    raw: dict = dataclass_field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "RobotAlert":
+        return cls(
+            id=body.get("id") or "",
+            robot_id=body.get("robot_id") or "",
+            robot_run_id=body.get("robot_run_id") or "",
+            row=int(body.get("row") or 0),
+            field=body.get("field") or "",
+            rule=body.get("rule") or "",
+            old=body.get("old"),
+            new=body.get("new"),
+            created_at=body.get("created_at"),
+            raw=body,
+        )
+
+
+@dataclass
+class RobotRunRow:
+    """One input row of a robot run."""
+    row: int
+    status: str
+    input: Optional[dict] = None
+    output: Any = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    credits: int = 0
+    recipe_run_id: Optional[str] = None
+    duration_ms: Optional[int] = None
+    alerts: list = field(default_factory=list)
+    changed_fields: list = field(default_factory=list)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "RobotRunRow":
+        return cls(
+            row=int(body.get("row") or 0),
+            status=body.get("status") or "",
+            input=body.get("input") if isinstance(body.get("input"), dict) else None,
+            output=body.get("output"),
+            error_code=body.get("error_code"),
+            error_message=body.get("error_message"),
+            credits=int(body.get("credits") or 0),
+            recipe_run_id=_opt_str(body.get("recipe_run_id")),
+            duration_ms=_opt_int(body.get("duration_ms")),
+            alerts=[RobotAlert.from_response(a) for a in body.get("alerts") or []],
+            changed_fields=list(body.get("changed_fields") or []),
+        )
+
+
+ROBOT_RUN_TERMINAL = ("completed", "partial", "failed")
+
+
+@dataclass
+class RobotRun:
+    """One run of a robot (GET /v1/robot-runs/:id).
+
+    status: "queued", "running", "completed", "partial" or "failed".
+    trigger: "manual", "schedule" or "api". credits is what the run charged:
+    the recipe's price per successful row. rows is set by robot_runs.get.
+    """
+    id: str
+    status: str
+    robot_id: str = ""
+    trigger: str = ""
+    rows_total: int = 0
+    rows_ok: int = 0
+    rows_failed: int = 0
+    rows_pending: int = 0
+    credits: int = 0
+    site: Optional[str] = None
+    stop_reason: Optional[str] = None
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    rows: Optional[list] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @property
+    def done(self) -> bool:
+        return self.status in ROBOT_RUN_TERMINAL
+
+    @classmethod
+    def from_response(cls, body: dict) -> "RobotRun":
+        rows = body.get("rows")
+        return cls(
+            id=body.get("id") or "",
+            status=body.get("status") or "",
+            robot_id=body.get("robot_id") or "",
+            trigger=body.get("trigger") or "",
+            rows_total=int(body.get("rows_total") or 0),
+            rows_ok=int(body.get("rows_ok") or 0),
+            rows_failed=int(body.get("rows_failed") or 0),
+            rows_pending=int(body.get("rows_pending") or 0),
+            credits=int(body.get("credits") or 0),
+            site=_opt_str(body.get("site")),
+            stop_reason=_opt_str(body.get("stop_reason")),
+            created_at=body.get("created_at"),
+            started_at=body.get("started_at"),
+            finished_at=body.get("finished_at"),
+            rows=[RobotRunRow.from_response(r) for r in rows] if isinstance(rows, list) else None,
+            raw=body,
+        )
+
+
+@dataclass
+class Robot:
+    """A robot: a saved browser job over a recipe, run on demand, on a
+    schedule or from the API. One run covers every input row; a row costs
+    the recipe's price_credits (``health.price_credits``), failed rows are free.
+
+    settings is ``{"model", "proxy", "browser"}``, each None when Auto.
+    schedule is ``{"interval_seconds", "at", "weekday", "tz", "next_run_at",
+    "enabled", "id"}`` or None.
+    """
+    id: str
+    name: str
+    status: str
+    description: str = ""
+    recipe_id: Optional[str] = None
+    paused_reason: Optional[str] = None
+    profile_id: Optional[str] = None
+    inputs: list = field(default_factory=list)
+    destinations: list = field(default_factory=list)
+    monitors: list = field(default_factory=list)
+    schedule: Optional[dict] = None
+    settings: dict = field(default_factory=lambda: {"model": None, "proxy": None, "browser": None})
+    source_job_id: Optional[str] = None
+    health: Optional[RobotHealth] = None
+    alerts_unread: int = 0
+    last_run: Optional[RobotRun] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "Robot":
+        raw_st = body.get("settings")
+        st: dict = raw_st if isinstance(raw_st, dict) else {}
+        h = body.get("health")
+        lr = body.get("last_run")
+        return cls(
+            id=body.get("id") or "",
+            name=body.get("name") or "",
+            status=body.get("status") or "",
+            description=body.get("description") or "",
+            recipe_id=_opt_str(body.get("recipe_id")),
+            paused_reason=_opt_str(body.get("paused_reason")),
+            profile_id=_opt_str(body.get("profile_id")),
+            inputs=list(body.get("inputs") or []),
+            destinations=list(body.get("destinations") or []),
+            monitors=list(body.get("monitors") or []),
+            schedule=body.get("schedule") if isinstance(body.get("schedule"), dict) else None,
+            settings={k: st.get(k) for k in ("model", "proxy", "browser")},
+            source_job_id=_opt_str(body.get("source_job_id")),
+            health=RobotHealth.from_response(h) if isinstance(h, dict) else None,
+            alerts_unread=int(body.get("alerts_unread") or 0),
+            last_run=RobotRun.from_response(lr) if isinstance(lr, dict) else None,
+            created_at=body.get("created_at"),
+            updated_at=body.get("updated_at"),
+            raw=body,
+        )

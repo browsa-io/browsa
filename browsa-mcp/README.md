@@ -18,6 +18,7 @@ Most "AI agent" setups stop at the LLM. We give the LLM a real browser. Through 
 - Return results as structured JSON
 - Use your own HTTP or SOCKS5 proxy per browser (free), or Browsa's built-in proxy network: datacenter or residential, billed per GB from credits (see `proxy_network`)
 - Stay logged in across calls via persistent identities
+- Run your robots (saved browser jobs) and read their rows
 
 No code from you: just configure Claude Desktop (or Cursor / Cline / Zed) once, and ask in natural language.
 
@@ -75,6 +76,7 @@ Any MCP-spec-compliant client. Point at `npx -y @browsa/mcp` and set `BROWSA_API
 | `BROWSA_LLM` | no | Default LLM, e.g. `anthropic:claude-sonnet-5-5`, or a hosted tier such as `browsa-fast`. Unset: the saved key's provider default model (`claude-opus-5-5` with `BROWSA_LLM_API_KEY`) |
 | `BROWSA_COUNTRY` | no | Default egress country (e.g. `US`) |
 | `BROWSA_BASE_URL` | no | Override prod URL (staging / self-hosted) |
+| `BROWSA_CAPTCHA_URL` | no | Captcha API for `solve_captcha_task`. Default: https://captcha.browsa.io (`BROWSA_BASE_URL` + `/captcha-api` when that is set) |
 
 ### Which LLM key a task uses
 
@@ -125,6 +127,10 @@ When the job has them, `run_task` and `get_job` results include `usage` (`input_
 | `list_job_files` | Output files a task wrote. |
 | `list_llm_keys` | Saved LLM keys: id, provider, masked key, default flag, status. Read-only; never returns a secret. |
 | `list_models` | Hosted tiers (model, default reasoning, credits per task) and own-key providers. Read-only and free. |
+| `list_robots` | Your robots: input rows, schedule, settings, health, last run and `price_credits` (per successful row; failed rows are free). |
+| `run_robot` | Run a robot on its saved rows or on rows you pass. Optional `wait_seconds` (up to 300) returns the rows. |
+| `get_robot_run` | One robot run: status, credits, and a row per input with its output or typed error. |
+| `solve_captcha_task` | Solve one captcha through Browsa's captcha API (`createTask` / `getTaskResult`): a reCAPTCHA or Turnstile token, image text or grid tiles, for code outside a Browsa browser. Charged only when solved. Measured types: https://browsa.io/captcha |
 
 ## Why MCP-first matters
 

@@ -18,6 +18,8 @@ Official clients for [Browsa](https://browsa.io), cloud browsers for AI agents. 
 - **Drive a browser yourself.** Start a Phantom browser in the cloud and connect Playwright or Puppeteer over CDP.
 - **Scrape, extract or screenshot a page** in one call.
 - **Schedule a task and receive results** on a signed webhook.
+- **Save a job as a robot.** Record a task once, then run it on rows of input, on a schedule or from the API, with no model in the loop. A row costs the same as the agent task; failed rows are free.
+- **Solve captchas** through the captcha API (`createTask` / `getTaskResult`) with the same key.
 
 ```python
 from browsa import Client
@@ -42,6 +44,7 @@ New accounts get 100 free credits after email verification: no card, and credits
 - Website: https://browsa.io
 - API docs: https://browsa.io/docs
 - MCP setup guide: https://browsa.io/guides/mcp-server
+- Robots guide: https://browsa.io/guides/robots
 - Pricing: https://browsa.io/pricing
 - Status: https://browsa.io/status
 - Support: support@browsa.io

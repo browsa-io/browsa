@@ -36,9 +36,9 @@ function rpc(child, request) {
 
 const TOOL_NAMES = [
   "act", "cancel_job", "create_schedule", "create_webhook", "credits", "delete_webhook",
-  "get_job", "list_browsers", "list_identities", "list_job_files", "list_llm_keys",
-  "list_models", "list_schedules", "list_webhooks", "observe", "proxy_network", "respond_to_job", "run_task", "start_browser",
-  "stop_browser",
+  "get_job", "get_robot_run", "list_browsers", "list_identities", "list_job_files", "list_llm_keys",
+  "list_models", "list_robots", "list_schedules", "list_webhooks", "observe", "proxy_network", "respond_to_job",
+  "run_robot", "run_task", "solve_captcha_task", "start_browser", "stop_browser",
 ];
 
 function boot(apiKey) {
@@ -57,7 +57,7 @@ async function initialize(child) {
 
 // Offline: listing tools makes no API call, so a placeholder key is enough.
 describe("MCP server stdio: tool catalog", () => {
-  test("list_tools returns the 13 documented tools", async () => {
+  test("list_tools returns the documented tools", async () => {
     const child = boot("agt_test_offline");
     try {
       await initialize(child);

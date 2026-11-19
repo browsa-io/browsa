@@ -46,8 +46,14 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { Client, BrowsaError } from "browsa";
 
+const VERSION = "0.5.0";
 const API_KEY = process.env.BROWSA_API_KEY;
 const BASE_URL = process.env.BROWSA_BASE_URL;
+// Captcha API (createTask / getTaskResult); same key. Default: https://captcha.browsa.io,
+// or <BROWSA_BASE_URL>/captcha-api when BROWSA_BASE_URL points at another copy (staging).
+const CAPTCHA_URL = (process.env.BROWSA_CAPTCHA_URL ||
+  (BASE_URL ? `${BASE_URL.replace(/\/+$/, "")}/captcha-api` : "https://captcha.browsa.io"))
+  .replace(/\/+$/, "");
 // Unset by default: with a saved key the server picks the model for the
 // key's provider. A per-task key (llm_api_key) needs a model, so it gets
 // BYOK_DEFAULT_LLM when neither the call nor BROWSA_LLM names one.
@@ -75,7 +81,7 @@ const client = (API_KEY
   : null) as Client;
 
 const server = new Server(
-  { name: "browsa", version: "0.3.2" },
+  { name: "browsa", version: VERSION },
   { capabilities: { tools: {} } },
 );
 
@@ -98,8 +104,8 @@ const tools = [
       "`final_result` says what stopped it. Use this when the " +
       "user asks for anything web-shaped: scrape, fill, click, extract, login, " +
       "place an order, search, summarize a page, etc. The browser is a real " +
-      "macOS-Chrome-fingerprinted Phantom browser with built-in CAPTCHA solving " +
-      "(Turnstile, hCaptcha, reCAPTCHA, ALTCHA, FunCaptcha) and behavioral " +
+      "macOS-Chrome-fingerprinted Phantom browser with built-in captcha solving " +
+      "(the measured types are listed at https://browsa.io/captcha) and behavioral " +
       "humanization. Default timeout: 10 minutes.",
     inputSchema: {
       type: "object",
@@ -443,6 +449,79 @@ const tools = [
       properties: { job_id: { type: "string", description: "The job id from run_task / create_task." } },
     },
   },
+  {
+    name: "list_robots",
+    description:
+      "List this workspace's robots: saved browser jobs over a recorded recipe, each with its input rows, " +
+      "schedule, model/proxy/browser settings, health (pass rate, last failure) and last run. price_credits is " +
+      "what one successful row costs (the recipe's price, the same as the agent task); failed rows are free. " +
+      "Robots are made at https://app.browsa.io (Robots) or with the API.",
+    inputSchema: {
+      type: "object",
+      properties: { limit: { type: "number", description: "At most this many robots (default 50)." } },
+    },
+  },
+  {
+    name: "run_robot",
+    description:
+      "Run a robot over all its input rows (or the rows you pass, for this run only). Replays the recorded " +
+      "recipe on Phantom with no model, so it is fast. Costs the robot's price_credits per successful row; " +
+      "failed rows are free. Returns the run; with wait_seconds it waits for the rows and returns them.",
+    inputSchema: {
+      type: "object",
+      required: ["robot_id"],
+      properties: {
+        robot_id: { type: "string", description: "From list_robots." },
+        inputs: {
+          type: "array",
+          items: { type: "object" },
+          description: "Rows for this run only, e.g. [{\"url\": \"https://...\"}]. Omit to use the robot's saved rows.",
+        },
+        wait_seconds: { type: "number", description: "Wait up to this long for the run to finish (0 to 300, default 0)." },
+      },
+    },
+  },
+  {
+    name: "get_robot_run",
+    description:
+      "Read one robot run: status (queued, running, completed, partial, failed), credits charged, and a row " +
+      "per input with its output, typed error (blocked, needs_login, site_changed, invalid_output, timeout) " +
+      "and the fields a monitor flagged as changed.",
+    inputSchema: {
+      type: "object",
+      required: ["run_id"],
+      properties: { run_id: { type: "string", description: "From run_robot or list_robots (last_run.id)." } },
+    },
+  },
+  {
+    name: "solve_captcha_task",
+    description:
+      "Solve one captcha through Browsa's captcha API (createTask / getTaskResult, the format CapSolver, " +
+      "Anti-Captcha and CapMonster share) and return its solution: a token to submit with the site's form, " +
+      "the text in an image, or the grid tiles to click. Use it when code or a page outside a Browsa browser " +
+      "needs a captcha answer; inside run_task the browser solves captchas itself. Charged only when solved. " +
+      "Measured pass rates per type: https://browsa.io/captcha. Token tasks can take up to about 2 minutes.",
+    inputSchema: {
+      type: "object",
+      required: ["task"],
+      properties: {
+        task: {
+          type: "object",
+          description:
+            "The createTask task. `type` is one of: ImageToTextTask {body: base64 image} -> {text}; " +
+            "ReCaptchaV2Classification {image: base64, question: '/m/...' id or words} -> {objects}; " +
+            "ReCaptchaV2TaskProxyLess / ReCaptchaV2EnterpriseTaskProxyLess {websiteURL, websiteKey, isInvisible?} -> {gRecaptchaResponse}; " +
+            "ReCaptchaV3TaskProxyLess / ReCaptchaV3EnterpriseTaskProxyLess {websiteURL, websiteKey, pageAction?} -> {gRecaptchaResponse}; " +
+            "AntiTurnstileTaskProxyLess {websiteURL, websiteKey, metadata?: {action?, cdata?}} -> {token}. " +
+            "Without ProxyLess the task also needs proxy: 'http://user:pass@host:port'. " +
+            "Other services' names (RecaptchaV2TaskProxyless, TurnstileTaskProxyless) are accepted.",
+          properties: { type: { type: "string" } },
+          required: ["type"],
+        },
+        timeout_seconds: { type: "number", description: "How long to wait for the solution. Default 180, at most 600." },
+      },
+    },
+  },
 ] as const;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
@@ -557,7 +636,7 @@ function llmKeyError(e: InstanceType<typeof BrowsaError>, choice: LlmChoice) {
 async function proxyNetwork() {
   const base = (BASE_URL || "https://browsa.io").replace(/\/+$/, "");
   const resp = await fetch(`${base}/v1/proxy-network`, {
-    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.2" },
+    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": `browsa-mcp/${VERSION}` },
   });
   const body: any = await resp.json().catch(() => ({}));
   if (resp.status === 404) return { enabled: false, tiers: [] };
@@ -586,7 +665,7 @@ function proxyUsage(raw: any): Record<string, unknown> {
 async function apiGet(path: string): Promise<any> {
   const base = (BASE_URL || "https://browsa.io").replace(/\/+$/, "");
   const resp = await fetch(`${base}${path}`, {
-    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp/0.3.2" },
+    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": `browsa-mcp/${VERSION}` },
   });
   const body: any = await resp.json().catch(() => ({}));
   if (!resp.ok) {
@@ -602,7 +681,7 @@ async function apiPost(path: string, payload: unknown, timeoutMs = 90_000): Prom
     method: "POST",
     headers: {
       "X-API-Key": API_KEY!, Accept: "application/json", "Content-Type": "application/json",
-      "User-Agent": "browsa-mcp/0.3.2",
+      "User-Agent": `browsa-mcp/${VERSION}`,
     },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(timeoutMs),
@@ -681,6 +760,124 @@ async function listLlmKeys() {
     manage_at: LLM_KEYS_URL,
   };
 }
+
+// ── Robots ──────────────────────────────────────────────────────────────
+// fetch directly, so the tools do not depend on the installed browsa SDK version.
+
+const ROBOT_RUN_DONE = ["completed", "partial", "failed"];
+const ROBOT_POLL_MS = Number(process.env.BROWSA_ROBOT_POLL_MS) || 3000;
+
+function robotSummary(r: any) {
+  const h = r?.health ?? {};
+  const s = r?.schedule;
+  const lr = r?.last_run;
+  return {
+    id: r?.id, name: r?.name, status: r?.status, paused_reason: r?.paused_reason ?? null,
+    recipe_id: r?.recipe_id ?? null, inputs_count: r?.inputs_count ?? (Array.isArray(r?.inputs) ? r.inputs.length : 0),
+    price_credits: h.price_credits ?? null, pass_rate: h.pass_rate ?? null, last_failure: h.last_failure ?? null,
+    schedule: s ? { interval_seconds: s.interval_seconds, at: s.at ?? null, tz: s.tz ?? null, next_run_at: s.next_run_at ?? null, enabled: s.enabled } : null,
+    settings: r?.settings ?? { model: null, proxy: null, browser: null },
+    alerts_unread: r?.alerts_unread ?? 0,
+    last_run: lr ? { id: lr.id, status: lr.status, rows_ok: lr.rows_ok, rows_failed: lr.rows_failed, credits: lr.credits, finished_at: lr.finished_at ?? null } : null,
+  };
+}
+
+function robotRunView(run: any) {
+  const out: Record<string, unknown> = {
+    id: run?.id, robot_id: run?.robot_id, status: run?.status, trigger: run?.trigger,
+    rows_total: run?.rows_total, rows_ok: run?.rows_ok, rows_failed: run?.rows_failed, rows_pending: run?.rows_pending,
+    credits: run?.credits, stop_reason: run?.stop_reason ?? null, finished_at: run?.finished_at ?? null,
+  };
+  if (Array.isArray(run?.rows)) {
+    out.rows = run.rows.map((r: any) => ({
+      row: r.row, input: r.input, status: r.status, output: r.output ?? null,
+      ...(r.error_code ? { error_code: r.error_code, error_message: r.error_message } : {}),
+      credits: r.credits,
+      ...(Array.isArray(r.changed_fields) && r.changed_fields.length ? { changed_fields: r.changed_fields } : {}),
+    }));
+  }
+  return out;
+}
+
+async function runRobot(args: Record<string, any>) {
+  const id = String(args.robot_id || "");
+  if (!id) return fail("robot_id is required");
+  const body: Record<string, unknown> = {};
+  if (Array.isArray(args.inputs)) body.inputs = args.inputs;
+  let run = await apiPost(`/v1/robots/${encodeURIComponent(id)}/run`, body, 30_000);
+  const waitMs = Math.min(Math.max(Number(args.wait_seconds) || 0, 0), 300) * 1000;
+  const deadline = Date.now() + waitMs;
+  while (waitMs > 0 && !ROBOT_RUN_DONE.includes(run?.status) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Math.min(ROBOT_POLL_MS, Math.max(0, deadline - Date.now()))));
+    run = await apiGet(`/v1/robot-runs/${encodeURIComponent(run.id)}`);
+  }
+  return ok(robotRunView(run));
+}
+
+// ── Captcha API ─────────────────────────────────────────────────────────
+// fetch directly, so the tool does not depend on the installed browsa SDK version.
+
+const CAPTCHA_ALIASES: Record<string, [string, string]> = {
+  recaptchav2taskproxyless: ["ReCaptchaV2TaskProxyLess", "ReCaptchaV2TaskProxyLess"],
+  nocaptchataskproxyless: ["ReCaptchaV2TaskProxyLess", "ReCaptchaV2TaskProxyLess"],
+  recaptchav2task: ["ReCaptchaV2TaskProxyLess", "ReCaptchaV2Task"],
+  recaptchav2enterprisetaskproxyless: ["ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTaskProxyLess"],
+  recaptchav2enterprisetask: ["ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTask"],
+  recaptchav3taskproxyless: ["ReCaptchaV3TaskProxyLess", "ReCaptchaV3TaskProxyLess"],
+  recaptchav3task: ["ReCaptchaV3TaskProxyLess", "ReCaptchaV3Task"],
+  recaptchav3enterprisetaskproxyless: ["ReCaptchaV3EnterpriseTaskProxyLess", "ReCaptchaV3EnterpriseTaskProxyLess"],
+  recaptchav3enterprisetask: ["ReCaptchaV3EnterpriseTaskProxyLess", "ReCaptchaV3EnterpriseTask"],
+  turnstiletaskproxyless: ["AntiTurnstileTaskProxyLess", "AntiTurnstileTaskProxyLess"],
+  antiturnstiletaskproxyless: ["AntiTurnstileTaskProxyLess", "AntiTurnstileTaskProxyLess"],
+  turnstiletask: ["AntiTurnstileTaskProxyLess", "AntiTurnstileTask"],
+  antiturnstiletask: ["AntiTurnstileTaskProxyLess", "AntiTurnstileTask"],
+  imagetotexttask: ["ImageToTextTask", "ImageToTextTask"],
+  recaptchav2classification: ["ReCaptchaV2Classification", "ReCaptchaV2Classification"],
+};
+
+async function captchaCall(method: string, payload: Record<string, unknown>): Promise<any> {
+  const resp = await fetch(`${CAPTCHA_URL}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": `browsa-mcp/${VERSION}` },
+    body: JSON.stringify({ clientKey: API_KEY, ...payload }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body: any = await resp.json().catch(() => null);
+  if (!body || typeof body !== "object" || !("errorId" in body)) {
+    throw new BrowsaError(`captcha API: unexpected answer (HTTP ${resp.status})`, { code: `HTTP_${resp.status}`, status: resp.status });
+  }
+  return body;
+}
+
+async function solveCaptchaTask(args: Record<string, any>) {
+  const task = { ...(args.task ?? {}) };
+  if (typeof task.type !== "string" || !task.type) return fail("task.type is required");
+  const pair = CAPTCHA_ALIASES[task.type.toLowerCase()];
+  if (pair) task.type = task.proxy || task.proxyAddress ? pair[1] : pair[0];
+  const timeoutMs = Math.min(Math.max(Number(args.timeout_seconds) || 180, 5), 600) * 1000;
+  const failed = (b: any) => fail(b.errorDescription || b.errorCode, {
+    code: b.errorCode, task_id: b.taskId, charged: false,
+    ...(b.errorCode === "ERROR_TASK_NOT_SUPPORTED" ? { measured_types: "https://browsa.io/captcha" } : {}),
+  });
+  const created = await captchaCall("createTask", { task });
+  if (created.errorId) return failed(created);
+  const started = Date.now();
+  if (created.status === "ready" && created.solution) {
+    return ok({ task_id: created.taskId, type: task.type, solution: created.solution, seconds: 0 });
+  }
+  const deadline = started + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Math.min(CAPTCHA_POLL_MS, Math.max(0, deadline - Date.now()))));
+    const r = await captchaCall("getTaskResult", { taskId: created.taskId });
+    if (r.errorId) return failed(r);
+    if (r.status === "ready") {
+      return ok({ task_id: created.taskId, type: task.type, solution: r.solution, seconds: Math.round((Date.now() - started) / 100) / 10 });
+    }
+  }
+  return fail(`no solution after ${Math.round(timeoutMs / 1000)}s; the task may still finish (charged only if solved)`,
+    { code: "TIMEOUT", task_id: created.taskId });
+}
+const CAPTCHA_POLL_MS = Number(process.env.BROWSA_CAPTCHA_POLL_MS) || 3000;
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const name = req.params.name;
@@ -837,6 +1034,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(await proxyNetwork());
       case "list_models":
         return ok(await listModels());
+      case "list_robots": {
+        const lim = Number(args.limit) > 0 ? `?limit=${Math.floor(Number(args.limit))}` : "";
+        const body = await apiGet(`/v1/robots${lim}`);
+        return ok({ robots: (body?.robots ?? []).map(robotSummary) });
+      }
+      case "run_robot":
+        return await runRobot(args);
+      case "get_robot_run":
+        if (!args.run_id) return fail("run_id is required");
+        return ok(robotRunView(await apiGet(`/v1/robot-runs/${encodeURIComponent(String(args.run_id))}`)));
+      case "solve_captcha_task":
+        return await solveCaptchaTask(args);
       default:
         return fail(`unknown tool: ${name}`);
     }

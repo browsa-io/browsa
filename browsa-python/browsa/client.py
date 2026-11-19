@@ -18,10 +18,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Union
+from typing import Any, AsyncIterator, Iterable, Iterator, List, Optional, Union
 
 from . import errors
-from .types import Job, JobFile, JobStatus, LLMKey, Models, Proxy, ProxyNetwork, Schedule, Session, Webhook
+from .types import (
+    Job, JobFile, JobStatus, LLMKey, Models, Proxy, ProxyNetwork, Recipe, RecipeRun, RecipeVersion,
+    Robot, RobotAlert, RobotRun, Schedule, Session, Webhook,
+)
 from ._version import __version__
 
 DEFAULT_BASE_URL = "https://browsa.io"
@@ -32,6 +35,11 @@ USER_AGENT = f"browsa-python/{__version__}"
 
 def _llm_key_path(llm_key_id: str) -> str:
     return "/v1/llm-keys/" + urllib.parse.quote(str(llm_key_id), safe="")
+
+
+def _q(segment: str) -> str:
+    """One URL path segment, escaped."""
+    return urllib.parse.quote(str(segment), safe="")
 
 
 class _Transport:
@@ -129,6 +137,171 @@ class _Transport:
             raise errors.BrowsaError(f"network error: {e}") from e
 
 
+_UNSET: Any = object()
+
+
+class Robots:
+    """``client.robots``: saved browser jobs over recipes, run on demand, on a
+    schedule or from the API. A row costs the recipe's price_credits; failed
+    rows are free.
+
+    ``settings`` is ``{"model": {"llm", "llm_key_id"?}, "proxy": {"network":
+    "datacenter" | "residential", "country"?} or {"proxy_id"}, "browser":
+    {"os": "mac" | "windows" | "linux", "screen": "1920x1080"}}``; a missing or
+    None part is Auto. ``schedule`` is ``{"interval_seconds": 86400, "at":
+    "09:00", "weekday": 1, "tz": "Europe/Paris"}``.
+    """
+
+    def __init__(self, t: _Transport) -> None:
+        self._t = t
+
+    @staticmethod
+    def _path(robot_id: str, rest: str = "") -> str:
+        return f"/v1/robots/{_q(robot_id)}{rest}"
+
+    def create(
+        self,
+        *,
+        name: str,
+        from_job_id: Optional[str] = None,
+        recipe_id: Optional[str] = None,
+        description: Optional[str] = None,
+        inputs: Optional[List[dict]] = None,
+        schedule: Optional[dict] = None,
+        destinations: Optional[List[dict]] = None,
+        monitors: Optional[List[dict]] = None,
+        profile_id: Optional[str] = None,
+        settings: Optional[dict] = None,
+    ) -> Robot:
+        """POST /v1/robots from a task run recorded with ``record_recipe=True``
+        (``from_job_id``) or from a recipe (``recipe_id``). ``inputs``: one
+        dict per row, up to 500."""
+        body = {k: v for k, v in {
+            "name": name, "from_job_id": from_job_id, "recipe_id": recipe_id,
+            "description": description, "inputs": inputs, "schedule": schedule,
+            "destinations": destinations, "monitors": monitors,
+            "profile_id": profile_id, "settings": settings,
+        }.items() if v is not None}
+        return Robot.from_response(self._t.request("POST", "/v1/robots", body=body))
+
+    def list(self, *, limit: Optional[int] = None) -> List[Robot]:
+        """GET /v1/robots, newest first."""
+        body = self._t.request("GET", "/v1/robots", query={"limit": limit}) or {}
+        return [Robot.from_response(r) for r in body.get("robots") or []]
+
+    def get(self, robot_id: str) -> Robot:
+        """GET /v1/robots/:id with health and the last run."""
+        return Robot.from_response(self._t.request("GET", self._path(robot_id)))
+
+    def update(
+        self,
+        robot_id: str,
+        *,
+        name: Any = _UNSET,
+        description: Any = _UNSET,
+        inputs: Any = _UNSET,
+        schedule: Any = _UNSET,
+        destinations: Any = _UNSET,
+        monitors: Any = _UNSET,
+        profile_id: Any = _UNSET,
+        settings: Any = _UNSET,
+        from_job_id: Any = _UNSET,
+        recipe_id: Any = _UNSET,
+    ) -> Robot:
+        """PATCH /v1/robots/:id. Only the fields you pass change. None clears
+        ``schedule``, ``profile_id`` and ``settings`` (Auto); ``settings``
+        replaces all three parts. ``from_job_id`` re-records the robot."""
+        fields = {
+            "name": name, "description": description, "inputs": inputs, "schedule": schedule,
+            "destinations": destinations, "monitors": monitors, "profile_id": profile_id,
+            "settings": settings, "from_job_id": from_job_id, "recipe_id": recipe_id,
+        }
+        body = {k: v for k, v in fields.items() if v is not _UNSET}
+        return Robot.from_response(self._t.request("PATCH", self._path(robot_id), body=body))
+
+    def delete(self, robot_id: str) -> None:
+        """DELETE /v1/robots/:id. Past runs stay as billing history."""
+        self._t.request("DELETE", self._path(robot_id))
+
+    def run(self, robot_id: str, *, inputs: Optional[List[dict]] = None) -> RobotRun:
+        """POST /v1/robots/:id/run. ``inputs`` replaces the saved rows for this
+        run only. Returns the queued run; see robot_runs.wait."""
+        body = {"inputs": inputs} if inputs is not None else {}
+        return RobotRun.from_response(self._t.request("POST", self._path(robot_id, "/run"), body=body))
+
+    def pause(self, robot_id: str) -> Robot:
+        return Robot.from_response(self._t.request("POST", self._path(robot_id, "/pause")))
+
+    def resume(self, robot_id: str) -> Robot:
+        return Robot.from_response(self._t.request("POST", self._path(robot_id, "/resume")))
+
+    def runs(self, robot_id: str, *, limit: Optional[int] = None) -> List[RobotRun]:
+        """GET /v1/robots/:id/runs, newest first (rows come with robot_runs.get)."""
+        body = self._t.request("GET", self._path(robot_id, "/runs"), query={"limit": limit}) or {}
+        return [RobotRun.from_response(r) for r in body.get("runs") or []]
+
+    def alerts(self, robot_id: str, *, limit: Optional[int] = None) -> List[RobotAlert]:
+        """GET /v1/robots/:id/alerts: what the monitors caught, newest first."""
+        body = self._t.request("GET", self._path(robot_id, "/alerts"), query={"limit": limit}) or {}
+        return [RobotAlert.from_response(a) for a in body.get("alerts") or []]
+
+    def mark_alerts_read(self, robot_id: str) -> None:
+        """POST /v1/robots/:id/alerts/read: alerts_unread goes to 0."""
+        self._t.request("POST", self._path(robot_id, "/alerts/read"))
+
+
+class RobotRuns:
+    """``client.robot_runs``: one run of a robot, with a row per input."""
+
+    def __init__(self, t: _Transport) -> None:
+        self._t = t
+
+    def get(self, run_id: str) -> RobotRun:
+        """GET /v1/robot-runs/:id with rows."""
+        return RobotRun.from_response(self._t.request("GET", f"/v1/robot-runs/{_q(run_id)}"))
+
+    def wait(self, run_id: str, *, timeout: float = 600.0, poll: float = 3.0) -> RobotRun:
+        """Poll get() until the run is completed, partial or failed."""
+        deadline = time.monotonic() + timeout
+        while True:
+            run = self.get(run_id)
+            if run.done:
+                return run
+            if time.monotonic() + poll > deadline:
+                raise errors.TimeoutError(f"robot run {run_id} still {run.status} after {timeout}s")
+            time.sleep(poll)
+
+    def export(self, run_id: str, *, format: str = "csv", items: Optional[int] = None) -> Any:
+        """GET /v1/robot-runs/:id/export. CSV (default) comes back as a str,
+        JSON as a dict with ``rows``. ``items`` caps list items per CSV cell
+        (default 5, up to 50)."""
+        out = self._t.request("GET", f"/v1/robot-runs/{_q(run_id)}/export",
+                              query={"format": format, "items": items})
+        if isinstance(out, (bytes, bytearray)):
+            text = out.decode("utf-8")
+            return json.loads(text) if format == "json" else text
+        return out
+
+
+class _AsyncWrap:
+    """Runs each method of a sync namespace in a worker thread."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        fn = getattr(self._inner, name)
+        if not callable(fn):
+            return fn
+
+        async def call(*a: Any, **kw: Any) -> Any:
+            return await asyncio.to_thread(fn, *a, **kw)
+
+        call.__name__ = name
+        call.__doc__ = fn.__doc__
+        return call
+
+
 class Client:
     """Synchronous REST client.
 
@@ -155,6 +328,10 @@ class Client:
                 "api_key must start with 'agt_'. Mint one at https://app.browsa.io/dashboard/keys"
             )
         self._t = _Transport(api_key, base_url, timeout)
+        #: Robots: saved browser jobs (create, list, get, update, delete, run, pause, resume).
+        self.robots = Robots(self._t)
+        #: One run of a robot (get, wait, export).
+        self.robot_runs = RobotRuns(self._t)
         # Page view sessions seen by observe()/act(): agent id ->
         # {"last": tab id, "tabs": {tab id: session}}. Sent back so the
         # server can tell when element ids are from a view it no longer has.
@@ -194,6 +371,7 @@ class Client:
         browser_ttl_seconds: Optional[int] = None,
         proxy: Optional[Proxy] = None,
         proxy_id: Optional[str] = None,
+        record_recipe: Optional[bool] = None,
         **extra: Any,
     ) -> Job:
         """POST /v1/tasks — submit a task; returns immediately with a job id.
@@ -254,6 +432,10 @@ class Client:
         proxy_network() reports enabled; the price per GB is returned there.
         proxy_id: a saved proxy instead of proxy (not both, and not with a
         network).
+
+        record_recipe: record the run as a recipe draft (replays). When the
+        task has finished, ``job.recipe_draft_id`` is set; create_recipe(
+        from_job_id=job.id) turns it into a recipe for run_recipe().
         """
         body: dict = {
             "task": task,
@@ -284,6 +466,7 @@ class Client:
             "browser_ttl_seconds": browser_ttl_seconds,
             "proxy": proxy,
             "proxy_id": proxy_id,
+            "record_recipe": record_recipe,
         }.items():
             if v is not None:
                 body[k] = v
@@ -649,6 +832,112 @@ class Client:
     def delete_schedule(self, schedule_id: str) -> None:
         """DELETE /v1/schedules/:id."""
         self._t.request("DELETE", f"/v1/schedules/{schedule_id}")
+
+    # ── Recipes (replays) ────────────────────────────────────────────────
+
+    def create_recipe(
+        self,
+        *,
+        from_job_id: Optional[str] = None,
+        recipe: Optional[dict] = None,
+        name: Optional[str] = None,
+        params: Optional[dict] = None,
+        output: Optional[dict] = None,
+        repair_mode: Optional[str] = None,
+    ) -> Recipe:
+        """POST /v1/recipes: a recipe from a task run made with
+        ``record_recipe=True`` (``from_job_id``) or from a recipe JSON
+        (``recipe``). ``params``/``output`` replace the recorded JSON Schemas.
+        ``repair_mode``: "auto" (default), "review" or "off". Version 1 is active."""
+        body = {k: v for k, v in {
+            "from_job_id": from_job_id, "recipe": recipe, "name": name,
+            "params": params, "output": output, "repair_mode": repair_mode,
+        }.items() if v is not None}
+        return Recipe.from_response(self._t.request("POST", "/v1/recipes", body=body))
+
+    def list_recipes(self, *, limit: Optional[int] = None) -> list[Recipe]:
+        """GET /v1/recipes: this workspace's recipes, newest first."""
+        body = self._t.request("GET", "/v1/recipes", query={"limit": limit}) or {}
+        return [Recipe.from_response(r) for r in body.get("recipes") or []]
+
+    def get_recipe(self, recipe_id: str) -> Recipe:
+        """GET /v1/recipes/:id, with the body of the current version."""
+        return Recipe.from_response(self._t.request("GET", f"/v1/recipes/{_q(recipe_id)}"))
+
+    def update_recipe(self, recipe_id: str, *, name: Optional[str] = None,
+                      repair_mode: Optional[str] = None) -> Recipe:
+        """PATCH /v1/recipes/:id: rename, or change repair_mode."""
+        body = {k: v for k, v in {"name": name, "repair_mode": repair_mode}.items() if v is not None}
+        return Recipe.from_response(self._t.request("PATCH", f"/v1/recipes/{_q(recipe_id)}", body=body))
+
+    def list_recipe_versions(self, recipe_id: str, *, include_recipe: bool = False) -> list[RecipeVersion]:
+        """GET /v1/recipes/:id/versions, newest first."""
+        body = self._t.request("GET", f"/v1/recipes/{_q(recipe_id)}/versions",
+                               query={"include": "recipe"} if include_recipe else None) or {}
+        return [RecipeVersion.from_response(v) for v in body.get("versions") or []]
+
+    def promote_recipe_version(self, recipe_id: str, version: int) -> Recipe:
+        """POST /v1/recipes/:id/versions/:version/promote: make a verified
+        version the one runs use (409 VERSION_NOT_VERIFIED otherwise)."""
+        return Recipe.from_response(self._t.request(
+            "POST", f"/v1/recipes/{_q(recipe_id)}/versions/{int(version)}/promote"))
+
+    def rollback_recipe(self, recipe_id: str, *, version: Optional[int] = None) -> Recipe:
+        """POST /v1/recipes/:id/rollback: back to the previous active
+        version, or to ``version``."""
+        body = {"version": version} if version is not None else {}
+        return Recipe.from_response(self._t.request("POST", f"/v1/recipes/{_q(recipe_id)}/rollback", body=body))
+
+    def delete_recipe(self, recipe_id: str) -> None:
+        """DELETE /v1/recipes/:id. Its runs stay readable."""
+        self._t.request("DELETE", f"/v1/recipes/{_q(recipe_id)}")
+
+    def run_recipe(
+        self,
+        recipe_id: str,
+        *,
+        params: Optional[dict] = None,
+        wait: Optional[float] = None,
+        webhook_url: Optional[str] = None,
+        proxy: Optional[dict] = None,
+        profile_id: Optional[str] = None,
+        allow_mutations: bool = False,
+    ) -> RecipeRun:
+        """POST /v1/recipes/:id/run. ``params`` are checked against the
+        recipe's params schema (400 PARAMS_INVALID). With ``wait`` (seconds,
+        up to 60) the call returns the finished run when it ends in time;
+        otherwise the queued run (see get_recipe_run). ``proxy`` is
+        ``{"network": "auto" | "datacenter" | "residential" | "default",
+        "country": "us"}``; the recipe's exit when omitted. A successful run
+        costs the recipe's price_credits; failed runs cost nothing."""
+        body: dict = {"params": params or {}}
+        if wait is not None:
+            body["wait"] = wait
+        if webhook_url is not None:
+            body["webhook_url"] = webhook_url
+        if proxy is not None:
+            body["proxy"] = proxy
+        if profile_id is not None:
+            body["profile_id"] = profile_id
+        if allow_mutations:
+            body["allow_mutations"] = True
+        w = min(max(float(wait or 0), 0.0), 60.0)
+        return RecipeRun.from_response(self._t.request(
+            "POST", f"/v1/recipes/{_q(recipe_id)}/run", body=body,
+            timeout=(w + 10) if w > 0 else None))
+
+    def get_recipe_run(self, run_id: str, *, wait: Optional[float] = None) -> RecipeRun:
+        """GET /v1/recipe-runs/:id. ``wait`` (seconds, up to 60) holds the
+        answer until the run ends."""
+        w = min(max(float(wait or 0), 0.0), 60.0)
+        return RecipeRun.from_response(self._t.request(
+            "GET", f"/v1/recipe-runs/{_q(run_id)}",
+            query={"wait": int(w) if w == int(w) else w} if w > 0 else None,
+            timeout=(w + 10) if w > 0 else None))
+
+    def cancel_recipe_run(self, run_id: str) -> RecipeRun:
+        """POST /v1/recipe-runs/:id/cancel (the job cancel path)."""
+        return RecipeRun.from_response(self._t.request("POST", f"/v1/recipe-runs/{_q(run_id)}/cancel"))
 
     # ── Webhooks ─────────────────────────────────────────────────────────
 
@@ -1320,6 +1609,10 @@ class AsyncClient:
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         self._sync = Client(api_key, base_url=base_url, timeout=timeout)
+        #: Same methods as Client.robots, awaitable.
+        self.robots: Any = _AsyncWrap(self._sync.robots)
+        #: Same methods as Client.robot_runs, awaitable.
+        self.robot_runs: Any = _AsyncWrap(self._sync.robot_runs)
 
     async def __aenter__(self) -> "AsyncClient":
         return self
@@ -1398,6 +1691,40 @@ class AsyncClient:
 
     async def delete_schedule(self, schedule_id: str) -> None:
         await asyncio.to_thread(self._sync.delete_schedule, schedule_id)
+
+    # Recipes (replays)
+    async def create_recipe(self, **kw: Any) -> Recipe:
+        return await asyncio.to_thread(self._sync.create_recipe, **kw)
+
+    async def list_recipes(self, **kw: Any) -> list[Recipe]:
+        return await asyncio.to_thread(self._sync.list_recipes, **kw)
+
+    async def get_recipe(self, recipe_id: str) -> Recipe:
+        return await asyncio.to_thread(self._sync.get_recipe, recipe_id)
+
+    async def update_recipe(self, recipe_id: str, **kw: Any) -> Recipe:
+        return await asyncio.to_thread(self._sync.update_recipe, recipe_id, **kw)
+
+    async def list_recipe_versions(self, recipe_id: str, **kw: Any) -> list[RecipeVersion]:
+        return await asyncio.to_thread(self._sync.list_recipe_versions, recipe_id, **kw)
+
+    async def promote_recipe_version(self, recipe_id: str, version: int) -> Recipe:
+        return await asyncio.to_thread(self._sync.promote_recipe_version, recipe_id, version)
+
+    async def rollback_recipe(self, recipe_id: str, **kw: Any) -> Recipe:
+        return await asyncio.to_thread(self._sync.rollback_recipe, recipe_id, **kw)
+
+    async def delete_recipe(self, recipe_id: str) -> None:
+        await asyncio.to_thread(self._sync.delete_recipe, recipe_id)
+
+    async def run_recipe(self, recipe_id: str, **kw: Any) -> RecipeRun:
+        return await asyncio.to_thread(self._sync.run_recipe, recipe_id, **kw)
+
+    async def get_recipe_run(self, run_id: str, **kw: Any) -> RecipeRun:
+        return await asyncio.to_thread(self._sync.get_recipe_run, run_id, **kw)
+
+    async def cancel_recipe_run(self, run_id: str) -> RecipeRun:
+        return await asyncio.to_thread(self._sync.cancel_recipe_run, run_id)
 
     async def list_webhooks(self) -> list[Webhook]:
         return await asyncio.to_thread(self._sync.list_webhooks)

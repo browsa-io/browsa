@@ -2,6 +2,40 @@
 
 Covers the three packages: npm `browsa`, npm `@browsa/mcp` and PyPI `browsa`. They share a version number.
 
+## 0.5.0 (2026-11-19)
+
+All three packages. 0.4.0 was prepared on 2026-11-17 and never published; everything it had ships here.
+
+### Added
+
+- **Robots** (TypeScript `client.robots` and `client.robotRuns`, Python `client.robots` and `client.robot_runs`, and the same on `AsyncClient`): `create` (from a task run recorded with `recordRecipe` / `record_recipe`, or from a recipe), `list`, `get`, `update`, `delete`, `run` (on the saved rows, or on rows for this run only), `pause`, `resume`, `runs`, `alerts`, `markAlertsRead` / `mark_alerts_read`; `robotRuns.get` (a row per input with its output, typed error, credits and changed fields), `wait` (polls until `completed`, `partial` or `failed`) and `export` (CSV text or JSON). Types `Robot`, `RobotRun`, `RobotRunRow`, `RobotAlert`, `RobotHealth`, `RobotSettings`, `RobotSchedule`, `RobotMonitor`, `RobotDestination`.
+- **Robot settings:** `settings.model` (a hosted tier, or a model of a saved key; it records the robot and repairs it), `settings.proxy` (Browsa's proxy network, datacenter or residential with an optional country, or a saved proxy) and `settings.browser` (`os`, `screen`). Each part is optional; unset is Auto. `update` with `settings: null` / `settings=None` goes back to Auto.
+- **Robot price:** a row costs the recipe's `price_credits` (`robot.health.priceCredits` / `price_credits`), the same credits as the agent task. Failed rows are free. `RobotRun.credits` is what a run charged.
+- **MCP:** `list_robots`, `run_robot` (optional `wait_seconds`, up to 300) and `get_robot_run`.
+- **Recipes (replays that pass bot walls):** `createRecipe` / `create_recipe` (from a task run with `fromJobId` / `from_job_id`, or an uploaded recipe JSON), `listRecipes`, `getRecipe`, `updateRecipe`, `listRecipeVersions`, `promoteRecipeVersion`, `rollbackRecipe`, `deleteRecipe`, `runRecipe` / `run_recipe` (with `wait` up to 60 seconds, `webhookUrl`, `proxy`, `profileId`, `allowMutations`), `getRecipeRun` / `get_recipe_run` (with `wait`) and `cancelRecipeRun`. Types `Recipe`, `RecipeVersion`, `RecipeRun`.
+- **Recipe price:** `Recipe.priceCredits` / `price_credits` is what one successful run costs, the same credits as the job run as an agent task (the recorded task's charge, or for an uploaded recipe the hosted `browsa` task price). `RecipeRun.priceCredits` and `credits` (the price when it succeeded, 0 when it failed or was cancelled).
+- **Tasks:** `recordRecipe` / `record_recipe` records the run as a recipe draft; the finished job has `recipeDraftId` / `recipe_draft_id`.
+- **Captcha solving client** (Python `browsa.captcha`, TypeScript `CaptchaClient`): `createTask`, `getTaskResult`, `getBalance` and `solve` (create and wait) for Browsa's captcha API at `https://captcha.browsa.io`, typed task builders (image text, reCAPTCHA v2 and v3, Turnstile, reCAPTCHA grid), and the task type names of CapSolver, Anti-Captcha, CapMonster and 2Captcha mapped to Browsa's. Same key and credits as the browser API; charged only when solved.
+- **Shims for libraries that cannot change their server:** a 2Captcha-shaped `TwoCaptcha` (Python) / `TwoCaptchaSolver` (TypeScript), and `use_with_anticaptcha` / `useWithAntiCaptcha` for Anti-Captcha's official clients.
+- **MCP:** `solve_captcha_task`.
+
+### Changed
+
+- The captcha clients and the MCP server default to `https://captcha.browsa.io`, where the captcha API is live (the unpublished 0.4.0 pointed at `browsa.io/captcha-api`, which does not serve it). `BROWSA_CAPTCHA_URL` still overrides it. With a Browsa key, `getBalance` / `get_balance` is in credits.
+- TypeScript: the error classes live in `errors.ts`; imports from `browsa` are unchanged.
+- MCP: `run_task`'s description no longer lists captcha types; it points to the measured list at browsa.io/captcha.
+- Release workflows for npm `browsa` and `@browsa/mcp` in the public repo: GitHub Actions with npm trusted publishing and provenance, on tags `browsa-ts-v<version>` and `browsa-mcp-v<version>`.
+
+### Docs
+
+- READMEs: a Robots section with a real example, captcha sections no longer say "not live yet", MCP tool table lists the robot tools.
+
+## 0.3.3 (`@browsa/mcp` only, 2026-11-17)
+
+### Changed
+
+- Tool descriptions and the README name the browser Phantom, Browsa's own browser.
+
 ## 0.3.2 (`@browsa/mcp` only)
 
 ### Fixed

@@ -108,6 +108,45 @@ A finished job has `usage` (`inputTokens`, `outputTokens`, `cacheReadTokens`, `c
 
 CLI: `browsa models` lists the hosted tiers and own-key providers; `browsa run "<task>" --llm browsa-smart --reasoning high` picks a tier and a reasoning level. After a run, the CLI prints the tier, reasoning, token counts and estimated cost when the job has them.
 
+## Robots
+
+A robot is a browser job you set up once: record a task, then run it on rows of input, on demand, on a schedule or from the API. Runs replay the recording on Phantom with no model.
+
+```ts
+const BOOK = "https://books.toscrape.com/catalogue";
+
+// 1. Record a task once
+const job = await c.runTask({
+  task: "Open the product page and return title, price and in_stock",
+  llm: "browsa",
+  initialUrl: `${BOOK}/sharp-objects_997/index.html`,
+  recordRecipe: true,
+});
+
+// 2. Save it as a robot
+const robot = await c.robots.create({
+  name: "Book prices",
+  fromJobId: job.id,
+  inputs: [{ url: `${BOOK}/sharp-objects_997/index.html` }, { url: `${BOOK}/soumission_998/index.html` }],
+  schedule: { intervalSeconds: 86400, at: "09:00", tz: "UTC" },
+  monitors: [{ field: "price", op: "changed" }],
+  settings: { proxy: { network: "datacenter" } },
+});
+
+// 3. Run it and read the rows
+const run = await c.robotRuns.wait((await c.robots.run(robot.id)).id);
+for (const r of run.rows ?? []) console.log(r.row, r.status, r.output ?? r.errorCode);
+const csv = await c.robotRuns.export(run.id);          // or { format: "json" }
+```
+
+| | |
+|---|---|
+| Price | `robot.health.priceCredits` per successful row, the same as the agent task. Failed rows are free. |
+| Settings | `model` (records and repairs), `proxy` (Browsa's network: datacenter 5, residential 50 credits/GB; or a saved `proxyId`, free), `browser` (`os`, `screen`). Unset is Auto. |
+| More | `list`, `get`, `update`, `delete`, `pause`, `resume`, `runs`, `alerts`, `markAlertsRead`. Recipes alone: `createRecipe`, `runRecipe`, `getRecipeRun`. |
+
+Guide: <https://browsa.io/guides/robots>.
+
 ## Webhooks
 
 ```ts
@@ -233,6 +272,37 @@ console.log(link.live_url);                         // opens once; make one per 
 ```
 
 `scope` is `"view"` (default) or `"control"`. Both calls are free.
+
+## Captcha solving
+
+`CaptchaClient` is a client for Browsa's captcha API: `createTask`, `getTaskResult` and `getBalance` in the format CapSolver, Anti-Captcha, CapMonster and 2Captcha's v2 API share. Same key and credits as the browser API. Failed and unsolvable tasks are not charged. Measured pass rates per type: <https://browsa.io/captcha>.
+
+```ts
+import { CaptchaClient, CaptchaError, captchaTasks as tasks } from "browsa";
+
+const cap = new CaptchaClient();          // BROWSA_API_KEY; https://captcha.browsa.io (or BROWSA_CAPTCHA_URL)
+const sol = await cap.solve(tasks.recaptchaV3("https://example.com/login", "6Lc...", { pageAction: "login" }));
+sol.gRecaptchaResponse;                    // typed by the builder; sol.taskId is the task id
+
+const { text } = await cap.solve(tasks.imageToText(fs.readFileSync("captcha.png")));
+await cap.getBalance();                    // credits
+```
+
+Builders: `imageToText`, `recaptchaV2`, `recaptchaV3`, `turnstile`, `recaptchaV2Classification` (and `awsWafClassification`, `slider`). Each takes `proxy` (a URL string or `{ type, host, port, username, password }`); without one the proxyless type is used.
+
+A task copied from code for another service works as it is: `RecaptchaV2TaskProxyless`, `TurnstileTask`, `NoCaptchaTaskProxyless` and the like are sent under Browsa's names (`normalizeCaptchaTask`). Errors throw `CaptchaError` with the API's `code`.
+
+Coming from a library that cannot be pointed at another server:
+
+```ts
+import { TwoCaptchaSolver as Solver, useWithAntiCaptcha } from "browsa";
+const solver = new Solver("agt_live_...");        // same calls as @2captcha/captcha-solver
+const { data } = await solver.recaptcha({ pageurl: "https://example.com", googlekey: "6Le-..." });
+
+useWithAntiCaptcha(require("@antiadmin/anticaptchaofficial"));   // its requests go to Browsa
+```
+
+CapSolver clients (`baseUrl`) and CapMonster's (`serviceUrl`) take a base URL as they are.
 
 ## Docs
 

@@ -29,6 +29,8 @@ For webhooks see browsa.webhooks.verify_signature.
 from .client import Client, AsyncClient
 from .types import (
     HostedModel, Job, JobFile, JobStatus, LLMKey, Models, OwnKeyModels, Schedule,
+    Recipe, RecipeRun, RecipeVersion,
+    Robot, RobotAlert, RobotHealth, RobotRun, RobotRunRow,
     Session, SessionBrowser, SessionTurn, Usage, Webhook,
     NetworkProxy, Proxy, ProxyConfig, ProxyNetwork, ProxyNetworkTier,
 )
@@ -56,6 +58,14 @@ __all__ = [
     "Models",
     "OwnKeyModels",
     "Schedule",
+    "Recipe",
+    "RecipeRun",
+    "RecipeVersion",
+    "Robot",
+    "RobotAlert",
+    "RobotHealth",
+    "RobotRun",
+    "RobotRunRow",
     "Session",
     "SessionBrowser",
     "SessionTurn",

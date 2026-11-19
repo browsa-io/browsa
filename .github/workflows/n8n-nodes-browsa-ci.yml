@@ -1,5 +1,5 @@
 # Lint, build and test n8n-nodes-browsa.
-# Copy to .github/workflows/ci-n8n.yml at the root of github.com/browsa-io/browsa
+# Copied to .github/workflows/n8n-nodes-browsa-ci.yml at the root of github.com/browsa-io/browsa
 # (GitHub only runs workflows from the repository root).
 name: CI n8n-nodes-browsa
 

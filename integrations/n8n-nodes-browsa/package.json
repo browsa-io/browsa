@@ -1,7 +1,7 @@
 {
 	"name": "n8n-nodes-browsa",
-	"version": "0.1.2",
-	"description": "n8n node for Browsa: run plain-language browser tasks, scrape, extract, screenshot and crawl pages in Phantom cloud browsers",
+	"version": "0.2.0",
+	"description": "n8n nodes for Browsa: run robots, recipes and plain-language browser tasks, scrape, extract, screenshot and crawl pages in Phantom cloud browsers, and start workflows on Browsa events",
 	"license": "MIT",
 	"homepage": "https://browsa.io",
 	"keywords": [
@@ -45,7 +45,8 @@
 			"dist/credentials/BrowsaApi.credentials.js"
 		],
 		"nodes": [
-			"dist/nodes/Browsa/Browsa.node.js"
+			"dist/nodes/Browsa/Browsa.node.js",
+			"dist/nodes/BrowsaTrigger/BrowsaTrigger.node.js"
 		]
 	},
 	"devDependencies": {
