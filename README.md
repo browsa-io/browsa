@@ -35,7 +35,7 @@ const job = await c.runTask({ task: "Return the top 3 Hacker News stories as JSO
 console.log(job.finalResult);
 ```
 
-New accounts get 100 free credits after email verification: no card, and credits never expire. Browsa does not supply proxies; you can bring your own HTTP, HTTPS or SOCKS5 proxy per browser.
+New accounts get 100 free credits after email verification: no card, and credits never expire. Browsa has a built-in proxy network, billed per GB from credits: datacenter at 5 credits/GB and residential at 50 credits/GB. Your own HTTP, HTTPS or SOCKS5 proxy per browser stays free.
 
 ## Links
 

@@ -16,7 +16,7 @@ MCP (Model Context Protocol) server for [Browsa](https://browsa.io): turn any LL
 Most "AI agent" setups stop at the LLM. We give the LLM a real browser. Through MCP, Claude can now:
 - Navigate, fill forms, click, scroll, scrape
 - Return results as structured JSON
-- Use your own HTTP or SOCKS5 proxy per browser, or a tier of Browsa's built-in network where it is on (see `proxy_network`)
+- Use your own HTTP or SOCKS5 proxy per browser (free), or Browsa's built-in proxy network: datacenter or residential, billed per GB from credits (see `proxy_network`)
 - Stay logged in across calls via persistent identities
 
 No code from you: just configure Claude Desktop (or Cursor / Cline / Zed) once, and ask in natural language.
