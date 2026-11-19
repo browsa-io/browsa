@@ -5,50 +5,28 @@
 
 # @browsa/mcp
 
-**Drive real browsers from Claude Desktop, Cursor, Cline, and any MCP-compatible client.**
-
-MCP (Model Context Protocol) server for [Browsa](https://browsa.io): turn any LLM into a real-browser agent with one config line. The agent gets a fresh cloud browser running Phantom, Browsa's own browser, and a live view link so you can watch it work.
+**Real cloud browsers for any MCP client.** Your model opens a Phantom browser (Browsa's own), reads the page as compact text, acts with real input, types saved secrets it never sees, hands over to a person when a check needs one, and replays what it did with no model calls.
 
 [![npm version](https://img.shields.io/npm/v/@browsa/mcp.svg)](https://www.npmjs.com/package/@browsa/mcp)
 
-## What this is
-
-Most "AI agent" setups stop at the LLM. We give the LLM a real browser. Through MCP, Claude can now:
-- Navigate, fill forms, click, scroll, scrape
-- Return results as structured JSON
-- Use your own HTTP or SOCKS5 proxy per browser (free), or Browsa's built-in proxy network: datacenter or residential, billed per GB from credits (see `proxy_network`)
-- Stay logged in across calls via persistent identities
-- Run your robots (saved browser jobs) and read their rows
-
-No code from you: just configure Claude Desktop (or Cursor / Cline / Zed) once, and ask in natural language.
+You need a Browsa API key: [app.browsa.io/dashboard/keys](https://app.browsa.io/dashboard/keys). Replace `agt_live_...` below with it.
 
 ## Install
 
-### Claude Desktop
+[![Add to Cursor](https://img.shields.io/badge/Cursor-Add_Browsa-111111?style=for-the-badge)](https://cursor.com/en/install-mcp?name=browsa&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBicm93c2EvbWNwIl0sImVudiI6eyJCUk9XU0FfQVBJX0tFWSI6ImFndF9saXZlXy4uLiJ9fQ==)
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_Browsa-0098FF?style=for-the-badge)](https://insiders.vscode.dev/redirect/mcp/install?name=browsa&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40browsa%2Fmcp%22%5D%2C%22env%22%3A%7B%22BROWSA_API_KEY%22%3A%22agt_live_...%22%7D%7D)
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+After a one-click install, put your key in place of `agt_live_...` in the client's MCP settings.
 
-```json
-{
-  "mcpServers": {
-    "browsa": {
-      "command": "npx",
-      "args": ["-y", "@browsa/mcp"],
-      "env": {
-        "BROWSA_API_KEY": "agt_live_..."
-      }
-    }
-  }
-}
+### Claude Code
+
+```bash
+claude mcp add browsa -e BROWSA_API_KEY=agt_live_... -- npx -y @browsa/mcp
 ```
 
-No LLM secret goes in the config: save your Anthropic, OpenAI or Google key once at [app.browsa.io/dashboard/llm-keys](https://app.browsa.io/dashboard/llm-keys) and tasks use the workspace's default saved key. (Prefer to keep it local? Add `"BROWSA_LLM_API_KEY": "sk-ant-..."` instead.)
+### Claude Desktop
 
-Restart Claude Desktop. Ask: *"Go to news.ycombinator.com and tell me the top story title."*
-
-### Cursor
-
-`~/.cursor/mcp.json`:
+Settings, Developer, Edit Config (`claude_desktop_config.json`):
 
 ```json
 {
@@ -62,85 +40,146 @@ Restart Claude Desktop. Ask: *"Go to news.ycombinator.com and tell me the top st
 }
 ```
 
-### Cline / Continue / Zed
+Restart Claude Desktop.
 
-Any MCP-spec-compliant client. Point at `npx -y @browsa/mcp` and set `BROWSA_API_KEY`.
+### Cursor
+
+The button above, the link `cursor://anysphere.cursor-deeplink/mcp/install?name=browsa&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBicm93c2EvbWNwIl0sImVudiI6eyJCUk9XU0FfQVBJX0tFWSI6ImFndF9saXZlXy4uLiJ9fQ==`, or the same `mcpServers` block as Claude Desktop in `~/.cursor/mcp.json`.
+
+### VS Code
+
+The button above, or:
+
+```bash
+code --add-mcp '{"name":"browsa","command":"npx","args":["-y","@browsa/mcp"],"env":{"BROWSA_API_KEY":"agt_live_..."}}'
+```
+
+### Windsurf
+
+`~/.codeium/windsurf/mcp_config.json`, the same `mcpServers` block as Claude Desktop.
+
+### Any other MCP client
+
+Command `npx -y @browsa/mcp`, environment `BROWSA_API_KEY`. Transport: stdio. Registry name: `io.browsa/browsa`.
+
+Then ask: *"Open books.toscrape.com and list the first five titles with their prices."*
+
+## Tools
+
+Nine tools are on by default. Their schemas are about 1.2k tokens in total.
+
+| Tool | What it does |
+|---|---|
+| `open` | Opens a cloud browser and goes to `url`. Returns the browser id, a live view link and the first view. Options: `country`, `profile` (a saved identity), `proxy`, `ttl` (default 10m). |
+| `observe` | The page as text, one line per element: `[id] role "name" state`. Default budget 1500 tokens, up to 6000. `scope: page` for the whole page, `expand` for one container in full, `find` (text or `/regex/`) for only the matching lines. |
+| `act` | One action with real input: click, type, press, select, check, uncheck, hover, scroll, navigate, back, forward, reload, wait, upload, dialog, press_and_hold, solve_captcha. Answers with what changed (at most 400 tokens) or a fresh view. |
+| `read` | The full content of one container, with no model: `as: text`, `table` (TSV) or `links`. |
+| `screenshot` | A JPEG of the viewport, the full page (`full`) or one element (`id`). |
+| `secrets` | Your saved secrets: names, kinds, the sites each may be typed on, and whether it has a one-time code. Never values. |
+| `handoff` | A single-use live link for a person to take over: a captcha the solver gave up on, a login, a decision. The next `observe` or `act` says when the page moved on. |
+| `flow` | `start` records your `act` and `read` steps, `save` stores them as a Browsa recipe, `run` replays it with no model calls, `list` shows them. |
+| `close` | Closes the browser. |
+
+`browser_id` is optional everywhere: it defaults to the last browser used.
+
+### What an answer looks like
+
+The first line of every `act` answer is one of `ok`, `failed`, `blocked`, `challenge`, `stale`, `dialog` or `secret_origin`, and when something stopped it says what to do next:
+
+```
+ok
+after: type [3] "poetry", then Enter
+~ [3] searchbox "Search"  value "poetry"
+settled after 180 ms, 1 request (GET /search → 200)
+```
+
+```
+stale: the page changed and those ids are gone; nothing was done. Fresh view:
+page "Results" https://books.toscrape.com/...
+```
+
+```
+challenge: turnstile check appeared; next: act solve_captcha, and if it stays, handoff
+```
+
+Errors work the same way: `error: AGENT_NOT_RUNNING: agent is destroyed` is followed by `next: this browser is gone (it expired or was closed); call open for a new one`.
+
+### Secrets by reference
+
+Save logins, one-time-code seeds and keys once in the dashboard (Secrets). The model sees only names:
+
+```
+secrets: 1 (values are never shown; type one with act {action: "type", id, secret: REF})
+GITHUB  login  on github.com and subdomains  refs GITHUB:username, GITHUB:password, TOTP:GITHUB  one-time code
+```
+
+`act {"action": "type", "id": 14, "secret": "GITHUB:password"}` sends only the reference. Browsa types the value inside the browser, only when the page and the field are on the secret's sites (otherwise the answer is `secret_origin` and nothing is typed), writes an audit row, and shows `<secret>GITHUB:password</secret>` wherever the value would appear. The value never passes through this MCP server or the model.
+
+### Flows: record once, replay with no model
+
+```
+flow {op: "start"}
+act ... / read ...                                   (do the task once)
+flow {op: "save", name: "book-search", params: {query: "poetry"}}
+flow {op: "run", name: "book-search", params: {query: "travel"}}
+```
+
+`params` on save names the values you typed that should change between runs: each example value becomes `{{query}}`. Secrets you typed are saved as references. A run costs the flow's `price_credits` when it succeeds; failed runs are free. When the site changed, `run` answers `site_changed` with the step that broke: redo it with `act` and save the flow again.
+
+### Privacy
+
+- Tokens in URLs (query and fragment parameters such as `token`, `key`, `session`, `code`, `signature`) are shown as `***` in every answer. `BROWSA_MCP_REDACT=off` turns this off for debugging.
+- The server writes no files. Screenshots and page text come back inline; state (open browsers, a flow being recorded) is kept in memory.
+- Live links are single use and expire.
+
+## More tools (optional groups)
+
+Everything else from 0.5 is in groups you turn on with `BROWSA_MCP_TOOLS` (comma separated) or the argument `--tools=...`:
+
+| Group | Tools |
+|---|---|
+| `tasks` | `run_task`, `get_job`, `cancel_job`, `respond_to_job`, `list_job_files` |
+| `robots` | `list_robots`, `run_robot`, `get_robot_run` |
+| `schedules` | `create_schedule`, `list_schedules` |
+| `webhooks` | `list_webhooks`, `create_webhook`, `delete_webhook` |
+| `cdp` | `start_browser`, `stop_browser` (a CDP address, to drive the browser from your own code) |
+| `captcha` | `solve_captcha_task` (Browsa's captcha API, for pages outside a Browsa browser) |
+| `admin` | `credits`, `list_browsers`, `list_identities`, `proxy_network`, `list_llm_keys`, `list_models` |
+| `all` | every group |
+
+```json
+"env": { "BROWSA_API_KEY": "agt_live_...", "BROWSA_MCP_TOOLS": "tasks,robots" }
+```
+
+A tool name works too (`BROWSA_MCP_TOOLS=run_task,credits`). Calling a tool whose group is off answers with the setting that turns it on.
+
+## Upgrading from 0.5
+
+0.6 lists nine tools instead of 25, so a model spends far fewer tokens on tool definitions before it starts.
+
+- **To keep every 0.5 tool**, set `BROWSA_MCP_TOOLS=all`. Nothing else changes for them: same names, same arguments, same JSON answers.
+- `start_browser` and `stop_browser` move to the `cdp` group. Use `open` and `close` instead: `open` also navigates and returns the first view.
+- `observe` and `act` keep their names and arguments; `browser_id` is now optional. Their answers are plain text and the first line of `act` is the status, as above. `observe`'s default budget is 1500 tokens (it was 2000); pass `budget` for more.
+- `run_task` and the other task tools are in the `tasks` group; robots in `robots`; credits, models, keys and identities in `admin`.
+- The task tools still read `BROWSA_LLM`, `BROWSA_LLM_KEY_ID` and `BROWSA_LLM_API_KEY`.
 
 ## Env
 
 | Var | Required | What |
 |---|---|---|
-| `BROWSA_API_KEY` | yes | Your `agt_live_*` key from [browsa.io → Keys](https://app.browsa.io/dashboard/keys) |
-| `BROWSA_LLM_KEY_ID` | no | Id of a saved LLM key to use by default (see `list_llm_keys`). Without it, the workspace's default saved key for the model's provider is used |
-| `BROWSA_LLM_API_KEY` | no | A per-task LLM provider key sent with every task. Not needed once a key is saved at [dashboard/llm-keys](https://app.browsa.io/dashboard/llm-keys). Wins over `BROWSA_LLM_KEY_ID` |
-| `BROWSA_LLM` | no | Default LLM, e.g. `anthropic:claude-sonnet-5-5`, or a hosted tier such as `browsa-fast`. Unset: the saved key's provider default model (`claude-opus-5-5` with `BROWSA_LLM_API_KEY`) |
-| `BROWSA_COUNTRY` | no | Default egress country (e.g. `US`) |
-| `BROWSA_BASE_URL` | no | Override prod URL (staging / self-hosted) |
-| `BROWSA_CAPTCHA_URL` | no | Captcha API for `solve_captcha_task`. Default: https://captcha.browsa.io (`BROWSA_BASE_URL` + `/captcha-api` when that is set) |
+| `BROWSA_API_KEY` | yes | Your `agt_live_*` key from [app.browsa.io/dashboard/keys](https://app.browsa.io/dashboard/keys) |
+| `BROWSA_MCP_TOOLS` | no | Optional groups to turn on, e.g. `tasks,robots`, or `all` |
+| `BROWSA_COUNTRY` | no | Default exit country for `open` (needs a proxy) |
+| `BROWSA_MCP_REDACT` | no | `off` shows URL tokens (debugging only) |
+| `BROWSA_LLM`, `BROWSA_LLM_KEY_ID`, `BROWSA_LLM_API_KEY` | no | Model and key for the `tasks` and `schedules` groups. Unset: the workspace's saved key, or Browsa's hosted model |
+| `BROWSA_CAPTCHA_URL` | no | Captcha API for `solve_captcha_task` (default `https://captcha.browsa.io`) |
+| `BROWSA_BASE_URL` | no | Another Browsa API (staging) |
 
-### Which LLM key a task uses
-
-Per call, first match wins: a hosted tier (`llm: "browsa"`, `"browsa-fast"` or `"browsa-smart"`: no key, see [Models](#models)), then `llm_api_key`, then `llm_key_id`, then `BROWSA_LLM_API_KEY`, then `BROWSA_LLM_KEY_ID`. With none of these, no key is sent and the server uses the workspace's default saved key for the provider of `llm` (with `llm` unset: the first default in the order anthropic, openai, google).
-
-If no key is saved at all:
-
-- **No model named** (no `llm` argument, no `BROWSA_LLM`): `run_task` and `create_schedule` still work with zero config. They retry once on Browsa's hosted model (which adds credits per task) and the result has a `note` saying so: *"No saved LLM key found, so this ran on Browsa's hosted model (adds credits per task; see list_models). Save a key at https://app.browsa.io/dashboard/llm-keys to use your own."* The same happens if the server has saved keys turned off (`LLM_KEYS_UNAVAILABLE`). A schedule created this way stays on the hosted model; create it again after saving a key.
-- **A model named**: there is no fallback. The tool returns an error (code `LLM_KEY_REQUIRED`) that says to save a key at [app.browsa.io/dashboard/llm-keys](https://app.browsa.io/dashboard/llm-keys), set `BROWSA_LLM_API_KEY`, or pass `llm: "browsa"`.
-
-## Models
-
-`run_task` and `create_schedule` take `llm` and `reasoning`:
-
-| `llm` | What it is |
-|---|---|
-| `"browsa"` | The default hosted model |
-| `"browsa-fast"` | Fastest and lightest |
-| `"browsa-smart"` | For harder tasks |
-| anything else, e.g. `"anthropic:claude-sonnet-5-5"` | A provider model, run with your own key (saved, or `llm_api_key`) |
-
-Hosted tiers need no LLM key and add a flat number of credits per task. Which model each tier runs on, and what it costs, are server settings that can change: the `list_models` tool returns them (free, read-only), along with the providers you can bring a key for.
-
-`reasoning` is `"low"`, `"medium"` or `"high"`; leave it out for the tier's or the provider's default. Ask in plain language, for example: *"Use browsa-smart with high reasoning to compare the pricing pages of these three sites."*
-
-`run_task` and `get_job` results carry `status` and `outcome`. `status: completed` only means the run ended; `outcome: failed` with it means the agent finished but could not do the task, and `outcome_message` and `final_result` say why. `signals` lists what was seen on the way (a bot check, a proxy failure) when there is any.
-
-When the job has them, `run_task` and `get_job` results include `usage` (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `requests`), `llm_tier`, `reasoning` (the level that was applied) and `llm_cost_usd`. `llm_cost_usd` is an estimate from public list prices for runs with your own key; it is `null` when unknown and always `null` for hosted runs, which are paid in credits.
-
-## Tools exposed
-
-| Tool | What |
-|---|---|
-| `run_task` | Run a browser-driven task. Returns the final result, `outcome` and steps. Optional `llm`, `reasoning`, `llm_key_id`. |
-| `get_job` | Poll a long-running task. Optional server-side `wait_seconds`. |
-| `cancel_job` | Cancel a running task. |
-| `respond_to_job` | Answer an `input_required` prompt (a decision, or a CAPTCHA the task could not solve itself: see https://browsa.io/captcha). |
-| `start_browser` | Start a real cloud browser and get its CDP URL, to drive yourself with Playwright or Puppeteer. |
-| `stop_browser` | Stop a browser from `start_browser` and release it. |
-| `proxy_network` | Whether Browsa's built-in proxy network is on, its tiers, countries and price. Read-only and free. |
-| `observe` | Read the page of a browser from `start_browser` as compact text with element ids. No Playwright needed. |
-| `act` | One action in that browser (click, type, press, select, scroll, navigate, wait and more); returns what changed. |
-| `list_browsers` | List this workspace's browsers and their status. |
-| `credits` | Show credit balance + top-up packs. |
-| `list_webhooks` / `create_webhook` / `delete_webhook` | Webhook CRUD. |
-| `list_identities` | List persistent browser identities (use one via `profile_id` to reuse warmed cookies). |
-| `create_schedule` / `list_schedules` | Recurring tasks. `create_schedule` takes `llm`, `reasoning` and `llm_key_id`; the schedule stores only the key's id. |
-| `list_job_files` | Output files a task wrote. |
-| `list_llm_keys` | Saved LLM keys: id, provider, masked key, default flag, status. Read-only; never returns a secret. |
-| `list_models` | Hosted tiers (model, default reasoning, credits per task) and own-key providers. Read-only and free. |
-| `list_robots` | Your robots: input rows, schedule, settings, health, last run and `price_credits` (per successful row; failed rows are free). |
-| `run_robot` | Run a robot on its saved rows or on rows you pass. Optional `wait_seconds` (up to 300) returns the rows. |
-| `get_robot_run` | One robot run: status, credits, and a row per input with its output or typed error. |
-| `solve_captcha_task` | Solve one captcha through Browsa's captcha API (`createTask` / `getTaskResult`): a reCAPTCHA or Turnstile token, image text or grid tiles, for code outside a Browsa browser. Charged only when solved. Measured types: https://browsa.io/captcha |
-
-## Why MCP-first matters
-
-Most agent platforms gate distribution behind "write code → deploy → call our API." We gate it behind "paste config → ask Claude." For an AI agent platform, **the prospect's first 30 seconds is the make-or-break moment.** With this MCP server, the first 30 seconds is a working browser doing what they asked.
-
-## Source + Issues
+## Links
 
 - Docs: <https://browsa.io/docs>
+- MCP guide: <https://browsa.io/guides/mcp-server>
 - Support: <mailto:support@browsa.io>
-- API reference: <https://browsa.io/docs>
 
 ## License
 

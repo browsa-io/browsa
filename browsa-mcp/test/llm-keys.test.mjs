@@ -89,7 +89,7 @@ function startMockApi() {
 }
 
 function startMcp(baseUrl, extraEnv = {}) {
-  const env = { ...process.env, BROWSA_API_KEY: "agt_test_x", BROWSA_BASE_URL: baseUrl, ...extraEnv };
+  const env = { ...process.env, BROWSA_API_KEY: "agt_test_x", BROWSA_BASE_URL: baseUrl, BROWSA_MCP_TOOLS: "all", ...extraEnv };
   for (const k of ["BROWSA_LLM_API_KEY", "BROWSA_LLM_KEY_ID", "BROWSA_LLM", "BROWSA_COUNTRY"]) {
     if (!(k in extraEnv)) delete env[k];
   }

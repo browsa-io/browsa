@@ -59,7 +59,7 @@ function startMockApi() {
 }
 
 function startMcp(baseUrl) {
-  const env = { ...process.env, BROWSA_API_KEY: "agt_test_x", BROWSA_BASE_URL: baseUrl, BROWSA_ROBOT_POLL_MS: "20" };
+  const env = { ...process.env, BROWSA_API_KEY: "agt_test_x", BROWSA_BASE_URL: baseUrl, BROWSA_MCP_TOOLS: "all", BROWSA_ROBOT_POLL_MS: "20" };
   for (const k of ["BROWSA_LLM_API_KEY", "BROWSA_LLM_KEY_ID", "BROWSA_LLM", "BROWSA_COUNTRY"]) delete env[k];
   const child = spawn("node", ["dist/server.js"], { env, stdio: ["pipe", "pipe", "ignore"] });
   let buf = "";

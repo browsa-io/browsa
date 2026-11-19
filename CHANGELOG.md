@@ -2,6 +2,25 @@
 
 Covers the three packages: npm `browsa`, npm `@browsa/mcp` and PyPI `browsa`. They share a version number.
 
+## 0.6.0 (`@browsa/mcp` only, not published yet)
+
+### Changed
+
+- **Nine core tools on by default** (about 1.2k tokens of schemas, was 25 tools): `open`, `observe`, `act`, `read`, `screenshot`, `secrets`, `handoff`, `flow`, `close`. `browser_id` is optional everywhere and defaults to the last browser used.
+- **The other 0.5 tools are optional groups**, turned on with `BROWSA_MCP_TOOLS` or `--tools=`: `tasks`, `robots`, `schedules`, `webhooks`, `cdp` (`start_browser`, `stop_browser`), `captcha`, `admin`, or `all` for every 0.5 tool. Names, arguments and answers of those tools are unchanged. A call to a tool whose group is off says which setting turns it on.
+- `observe` and `act` answer in plain text. The first line of `act` is the status (`ok`, `failed`, `blocked`, `challenge`, `stale`, `dialog`, `secret_origin`) with the next step when something stopped; errors end with a `next:` line. `observe`'s default budget is 1500 tokens (was 2000), at most 6000; an `act` diff over 400 tokens comes back as a fresh view instead.
+- Tool texts and the README name no other product.
+
+### Added
+
+- `open` (browser, navigation and first view in one call), `observe find` (only the matching lines, with their container), `act solve_captcha` and `press_and_hold`, `act secret` (a saved secret typed by Browsa by reference: the value never reaches the MCP server or the model), `read` (a container as text, a table as TSV, or links, with no model), `screenshot` (JPEG), `secrets` (names, kinds, sites, one-time-code flag, never values), `handoff` (a single-use live link; the next `observe` or `act` says when the page moved on), `flow` (`start` records `act` and `read` steps, `save` stores a recipe with parameters and secret references, `run` replays it with no model calls and answers `site_changed` with the failing step, `list`).
+- Tokens in URLs (`token`, `key`, `session`, `code`, `signature` and similar parameters) are masked in every answer (`BROWSA_MCP_REDACT=off` to debug). The server writes no files.
+- README: install one-liners and links for Claude Code, Claude Desktop, Cursor, VS Code and Windsurf, and an upgrade section.
+
+### Needs the agents service release of 2026-11-19
+
+`act secret`, `screenshot`, the CSS locators a flow records (`act record`, `observe selector`) and `flow run version` use API fields added to the agents service in the same change. Until it is deployed, `screenshot` says the server cannot take screenshots yet, `act secret` answers `failed` (nothing typed), flows record role-and-name locators without `read` steps, and `flow run version` runs the current version with a note.
+
 ## 0.5.0 (2026-11-19)
 
 All three packages. 0.4.0 was prepared on 2026-11-17 and never published; everything it had ships here.

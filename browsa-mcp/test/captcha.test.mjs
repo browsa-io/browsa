@@ -44,7 +44,7 @@ function startMockCaptchaApi() {
 }
 
 function startMcp(env) {
-  const e = { ...process.env, BROWSA_API_KEY: KEY, BROWSA_CAPTCHA_POLL_MS: "20", ...env };
+  const e = { ...process.env, BROWSA_API_KEY: KEY, BROWSA_CAPTCHA_POLL_MS: "20", BROWSA_MCP_TOOLS: "all", ...env };
   delete e.BROWSA_CAPTCHA_URL;
   Object.assign(e, env);
   const child = spawn("node", ["dist/server.js"], { env: e, stdio: ["pipe", "pipe", "ignore"] });
@@ -100,7 +100,7 @@ describe("MCP solve_captcha_task", () => {
     assert.ok(!/\d+ ?%/.test(t.description), "a rate is written into the description");
     assert.ok(!/hCaptcha|FunCaptcha|ALTCHA/.test(byName.run_task.description), "run_task lists unmeasured types");
     const init = await mcp.rpc("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "0" } });
-    assert.equal(init.result.serverInfo.version, "0.5.0");
+    assert.equal(init.result.serverInfo.version, "0.6.0");
   });
 
   test("recognition: answered in createTask", async () => {

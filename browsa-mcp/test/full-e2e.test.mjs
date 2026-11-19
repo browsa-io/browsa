@@ -16,10 +16,11 @@ const SPEND = process.env.BROWSA_LIVE_SPEND === "1";
 const BASE = (process.env.BROWSA_BASE_URL || "https://browsa.io").replace(/\/+$/, "");
 
 const TOOL_NAMES = [
-  "act", "cancel_job", "create_schedule", "create_webhook", "credits", "delete_webhook",
-  "get_job", "list_browsers", "list_identities", "list_job_files", "list_llm_keys",
-  "list_models", "list_schedules", "list_webhooks", "observe", "proxy_network", "respond_to_job", "run_task", "start_browser",
-  "stop_browser",
+  "act", "cancel_job", "close", "create_schedule", "create_webhook", "credits", "delete_webhook",
+  "flow", "get_job", "get_robot_run", "handoff", "list_browsers", "list_identities", "list_job_files",
+  "list_llm_keys", "list_models", "list_robots", "list_schedules", "list_webhooks", "observe", "open",
+  "proxy_network", "read", "respond_to_job", "run_robot", "run_task", "screenshot", "secrets",
+  "solve_captcha_task", "start_browser", "stop_browser",
 ];
 
 function rpc(child, request, timeoutMs = 60_000) {
@@ -74,7 +75,7 @@ describe("MCP full e2e: every tool", { skip: !KEY }, () => {
   });
 
   test("boot + initialize", async () => {
-    const env = { ...process.env, BROWSA_API_KEY: KEY };
+    const env = { ...process.env, BROWSA_API_KEY: KEY, BROWSA_MCP_TOOLS: "all" };
     for (const k of ["BROWSA_LLM_API_KEY", "BROWSA_LLM_KEY_ID", "BROWSA_LLM"]) delete env[k];
     child = spawn("node", ["dist/server.js"], { env, stdio: ["pipe", "pipe", "inherit"] });
     const r = await rpc(child, {
@@ -85,7 +86,7 @@ describe("MCP full e2e: every tool", { skip: !KEY }, () => {
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   });
 
-  test("tools/list returns the 13 tools", async () => {
+  test("tools/list with BROWSA_MCP_TOOLS=all returns every tool", async () => {
     const r = await rpc(child, { jsonrpc: "2.0", id: 2, method: "tools/list" });
     assert.deepEqual(r.result.tools.map((t) => t.name).sort(), TOOL_NAMES);
     for (const t of r.result.tools) {
