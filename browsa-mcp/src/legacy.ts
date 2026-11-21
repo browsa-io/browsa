@@ -4,13 +4,10 @@
 
 import { Client } from "browsa";
 import { apiGet, apiPost, BrowsaError } from "./api.js";
+import { captchaCall, runCaptchaTask } from "./captcha/client.js";
+import { chargedCredits, guardedSolve, priceOf } from "./captcha/tools.js";
 import { API_KEY, BASE_URL, BASE_URL_SET } from "./config.js";
 
-// Captcha API (createTask / getTaskResult); same key. Default: https://captcha.browsa.io,
-// or <BROWSA_BASE_URL>/captcha-api when BROWSA_BASE_URL points at another copy (staging).
-const CAPTCHA_URL = (process.env.BROWSA_CAPTCHA_URL ||
-  (BASE_URL_SET ? `${BASE_URL}/captcha-api` : "https://captcha.browsa.io"))
-  .replace(/\/+$/, "");
 // Unset by default: with a saved key the server picks the model for the
 // key's provider. A per-task key (llm_api_key) needs a model, so it gets
 // BYOK_DEFAULT_LLM when neither the call nor BROWSA_LLM names one.
@@ -435,7 +432,7 @@ export const legacyTools = [
     name: "report_captcha_result",
     description:
       "Tell Browsa whether the site accepted a solution from solve_captcha_task: correct=true records that it worked, " +
-      "correct=false that the site refused it. Reports are recorded and used to improve solving. A task can be " +
+      "correct=false that the site refused it. An incorrect report refunds that solve once, within the workspace's report limits; the answer says whether it did (refunded). A task can be " +
       "reported once, within 15 minutes of the solve. " +
       "Report only what the site itself answered.",
     inputSchema: {
@@ -699,7 +696,7 @@ async function runRobot(args: Record<string, any>) {
 }
 
 // ── Captcha API ─────────────────────────────────────────────────────────
-// fetch directly, so the tool does not depend on the installed browsa SDK version.
+// The calls themselves are in captcha/client.ts (fetch, so no dependency on the installed browsa SDK version).
 
 const CAPTCHA_ALIASES: Record<string, [string, string]> = {
   recaptchav2taskproxyless: ["ReCaptchaV2TaskProxyLess", "ReCaptchaV2TaskProxyLess"],
@@ -719,65 +716,38 @@ const CAPTCHA_ALIASES: Record<string, [string, string]> = {
   recaptchav2classification: ["ReCaptchaV2Classification", "ReCaptchaV2Classification"],
 };
 
-async function captchaCall(method: string, payload: Record<string, unknown> | null): Promise<any> {
-  // payload null: a GET with no key (the type catalogue is public)
-  const resp = await fetch(`${CAPTCHA_URL}/${method}`, payload === null
-    ? { method: "GET", headers: { Accept: "application/json", "User-Agent": "browsa-mcp" }, signal: AbortSignal.timeout(30_000) }
-    : {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "browsa-mcp" },
-      body: JSON.stringify({ clientKey: API_KEY, ...payload }),
-      signal: AbortSignal.timeout(30_000),
-    });
-  const body: any = await resp.json().catch(() => null);
-  if (!body || typeof body !== "object" || !("errorId" in body)) {
-    throw new BrowsaError(`captcha API: unexpected answer (HTTP ${resp.status})`, { code: `HTTP_${resp.status}`, status: resp.status });
-  }
-  return body;
-}
-
 async function solveCaptchaTask(args: Record<string, any>) {
   const task = { ...(args.task ?? {}) };
   if (typeof task.type !== "string" || !task.type) return fail("task.type is required");
   const pair = CAPTCHA_ALIASES[task.type.toLowerCase()];
   if (pair) task.type = task.proxy || task.proxyAddress ? pair[1] : pair[0];
   const timeoutMs = Math.min(Math.max(Number(args.timeout_seconds) || 180, 5), 600) * 1000;
-  const failed = (b: any) => fail(b.errorDescription || b.errorCode, {
-    code: b.errorCode, task_id: b.taskId, charged: b.charged === true,
-    ...(b.fix ? { fix: b.fix } : {}),
-    ...(b.errorCode === "ERROR_TASK_NOT_SUPPORTED"
-      ? { measured_types: "https://browsa.io/captcha", next: "call list_captcha_types for the type names and their parameters" } : {}),
+  // The local limits (BROWSA_CAPTCHA_MAX_CREDITS and the others) cover this tool too; unset, nothing changes.
+  const r = await guardedSolve(priceOf(task.type), async () => {
+    const o = await runCaptchaTask(task, timeoutMs);
+    return { credits: o.state === "solved" ? chargedCredits(o.body, task.type) : 0, value: o };
   });
-  const started = Date.now();
-  const deadline = started + timeoutMs;
-  // The API holds each call until the task ends (waitSeconds), so there is no poll timer to wait out.
-  const hold = () => Math.max(0, Math.min(CAPTCHA_WAIT_S, Math.floor((deadline - Date.now()) / 1000)));
-  const solved = (b: any) => ok({
-    task_id: created.taskId, type: task.type, solution: b.solution,
-    seconds: typeof b.solveSeconds === "number" ? b.solveSeconds : Math.round((Date.now() - started) / 100) / 10,
-    ...(b.cost ? { cost: b.cost } : {}),
+  if ("refused" in r) return { isError: true, content: [{ type: "text" as const, text: r.refused.text }] };
+  const o = r.value;
+  if (o.state === "error") {
+    const b = o.body;
+    return fail(b.errorDescription || b.errorCode, {
+      code: b.errorCode, task_id: b.taskId, charged: b.charged === true,
+      ...(b.fix ? { fix: b.fix } : {}),
+      ...(b.errorCode === "ERROR_TASK_NOT_SUPPORTED"
+        ? { measured_types: "https://browsa.io/captcha", next: "call list_captcha_types for the type names and their parameters" } : {}),
+    });
+  }
+  if (o.state === "timeout") {
+    return fail(`no solution after ${Math.round(timeoutMs / 1000)}s; the task may still finish (charged only if solved)`,
+      { code: "TIMEOUT", task_id: o.taskId });
+  }
+  return ok({
+    task_id: o.taskId, type: task.type, solution: o.body.solution, seconds: o.seconds,
+    ...(o.body.cost ? { cost: o.body.cost } : {}),
     next: "when the site has answered, call report_captcha_result with correct=true or correct=false",
   });
-  const created = await captchaCall("createTask", { task, ...(hold() ? { waitSeconds: hold() } : {}) });
-  if (created.errorId) return failed(created);
-  if (created.status === "ready" && created.solution) return solved(created);
-  while (Date.now() < deadline) {
-    const wait = hold();
-    if (!wait) await new Promise((r) => setTimeout(r, Math.min(CAPTCHA_POLL_MS, Math.max(0, deadline - Date.now()))));
-    const asked = Date.now();
-    const r = await captchaCall("getTaskResult", { taskId: created.taskId, ...(wait ? { waitSeconds: wait } : {}) });
-    if (r.errorId) return failed(r);
-    if (r.status === "ready") return solved(r);
-    if (wait && Date.now() - asked < 1000) {
-      // answered at once though asked to hold (an older server): poll, do not spin
-      await new Promise((res) => setTimeout(res, Math.min(CAPTCHA_POLL_MS, Math.max(0, deadline - Date.now()))));
-    }
-  }
-  return fail(`no solution after ${Math.round(timeoutMs / 1000)}s; the task may still finish (charged only if solved)`,
-    { code: "TIMEOUT", task_id: created.taskId });
 }
-const CAPTCHA_POLL_MS = Number(process.env.BROWSA_CAPTCHA_POLL_MS) || 3000;
-const CAPTCHA_WAIT_S = 20;
 
 async function listCaptchaTypes(args: Record<string, any>) {
   const r = await captchaCall("types", null);

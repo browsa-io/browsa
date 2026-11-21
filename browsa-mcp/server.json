@@ -1,20 +1,20 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.browsa/browsa",
-  "description": "Cloud browsers for AI agents: compact page views, real input, secrets by reference, replays.",
+  "description": "Cloud browsers for AI agents, and captcha solving for a browser of your own.",
   "repository": {
     "url": "https://github.com/browsa-io/browsa",
     "source": "github",
     "subfolder": "browsa-mcp"
   },
   "websiteUrl": "https://browsa.io",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@browsa/mcp",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -22,13 +22,31 @@
       "environmentVariables": [
         {
           "name": "BROWSA_API_KEY",
-          "description": "Browsa API key from https://app.browsa.io/dashboard/keys",
+          "description": "Browsa API key from https://app.browsa.io/dashboard/keys. detect_captcha runs without it.",
           "isRequired": true,
           "isSecret": true
         },
         {
           "name": "BROWSA_MCP_TOOLS",
-          "description": "Optional tool groups to turn on, e.g. tasks,robots, or all for every 0.5 tool.",
+          "description": "Optional tool groups, e.g. tasks,robots or captcha_page; all for every group; captcha_page,-core for only the captcha tools.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "BROWSA_CAPTCHA_MAX_CREDITS",
+          "description": "Optional. The most credits one session may spend on captcha solves.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "BROWSA_CAPTCHA_RATE_PER_MINUTE",
+          "description": "Optional. The most captcha solves started in any 60 seconds.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "BROWSA_CAPTCHA_CONCURRENCY",
+          "description": "Optional. The most captcha solves running at once.",
           "isRequired": false,
           "isSecret": false
         },

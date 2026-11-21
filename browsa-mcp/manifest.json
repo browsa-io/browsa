@@ -1,0 +1,81 @@
+{
+  "manifest_version": "0.2",
+  "name": "browsa",
+  "display_name": "Browsa",
+  "version": "0.8.0",
+  "description": "Cloud browsers for AI agents, and captcha solving for a browser of your own.",
+  "long_description": "Browsa gives a model a real cloud browser (Phantom): it reads the page as compact text, acts with real input, types saved secrets it never sees, hands over to a person when a check needs one, and replays what it did with no model calls. For agents that drive their own browser, the captcha tools find the captcha in a page's HTML locally and return a solution with the step to apply it in that browser.",
+  "author": {
+    "name": "Browsa",
+    "email": "support@browsa.io",
+    "url": "https://browsa.io"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/browsa-io/browsa"
+  },
+  "homepage": "https://browsa.io",
+  "documentation": "https://browsa.io/guides/mcp-server",
+  "support": "https://github.com/browsa-io/browsa/issues",
+  "license": "MIT",
+  "keywords": ["browser", "browser-automation", "ai-agents", "captcha", "cloud-browser"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/server.js"],
+      "env": {
+        "BROWSA_API_KEY": "${user_config.api_key}",
+        "BROWSA_MCP_TOOLS": "${user_config.tools}",
+        "BROWSA_CAPTCHA_MAX_CREDITS": "${user_config.captcha_max_credits}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "open", "description": "Open a cloud browser and go to a URL." },
+    { "name": "observe", "description": "The page as compact text, one line per element." },
+    { "name": "act", "description": "One action with real input: click, type, press, scroll and more." },
+    { "name": "read", "description": "The full content of one container: text, a table or links." },
+    { "name": "screenshot", "description": "A JPEG of the viewport, the page or one element." },
+    { "name": "secrets", "description": "Names of saved secrets; values are never shown." },
+    { "name": "handoff", "description": "A single-use live link for a person to take over." },
+    { "name": "flow", "description": "Record steps once, replay them with no model." },
+    { "name": "close", "description": "Close the browser." },
+    { "name": "detect_captcha", "description": "Optional group captcha_page: find the captchas in a page's HTML, locally." },
+    { "name": "solve_captcha_on_page", "description": "Optional group captcha_page: solve a token captcha for a browser of your own." },
+    { "name": "captcha_allowance", "description": "Optional group captcha_page: local captcha limits and spend." }
+  ],
+  "prompts": [
+    { "name": "solve_captcha_on_my_page", "description": "Detect, solve, apply and verify the captcha on a page in your own browser.", "arguments": ["url"], "text": "Solve the captcha on ${arguments.url} with detect_captcha and solve_captcha_on_page, apply the answer in my browser and verify." },
+    { "name": "what_captcha_is_this", "description": "Which captcha a page has, and whether Browsa's captcha API takes it.", "arguments": ["url"], "text": "Tell me which captcha is on ${arguments.url} with detect_captcha. Solve nothing." },
+    { "name": "pass_check_in_browsa_browser", "description": "Open a page in a Browsa browser and get past its check.", "arguments": ["url"], "text": "Open ${arguments.url} in a Browsa browser; if a check appears, act solve_captcha, then handoff if it stays." }
+  ],
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "Browsa API key",
+      "description": "From https://app.browsa.io/dashboard/keys. detect_captcha works without it.",
+      "sensitive": true,
+      "required": false
+    },
+    "tools": {
+      "type": "string",
+      "title": "Tool groups",
+      "description": "Optional. Groups to add to the nine browser tools, e.g. captcha_page or tasks,robots. captcha_page,-core lists only the captcha tools for your own browser.",
+      "required": false,
+      "default": ""
+    },
+    "captcha_max_credits": {
+      "type": "string",
+      "title": "Captcha spend cap (credits)",
+      "description": "Optional. The most credits one session may spend on captcha solves, e.g. 5.",
+      "required": false,
+      "default": ""
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=18.0.0" }
+  }
+}

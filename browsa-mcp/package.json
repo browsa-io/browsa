@@ -1,8 +1,8 @@
 {
   "name": "@browsa/mcp",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "mcpName": "io.browsa/browsa",
-  "description": "MCP server for Browsa: real cloud browsers (Phantom) for Claude, Cursor, VS Code and any MCP client: compact page views, real input, secrets by reference, hand-off and no-model replays",
+  "description": "MCP server for Browsa: real cloud browsers (Phantom) for Claude, Cursor, VS Code and any MCP client, and captcha solving for a browser of your own",
   "license": "MIT",
   "author": "Browsa <support@browsa.io>",
   "homepage": "https://browsa.io",
@@ -32,13 +32,18 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "SECURITY.md",
+    "LICENSE",
+    "manifest.json"
   ],
   "scripts": {
     "build": "tsup src/server.ts --format esm --target node18 --clean --shims",
-    "test": "node --test test/*.test.mjs",
+    "test": "npm run build:test --silent && node --test test/*.test.mjs",
     "prepublishOnly": "npm run build && npm test",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "build:test": "tsup src/captcha/detect.ts src/captcha/apply.ts src/captcha/guards.ts src/captcha/tools.ts src/retry.ts src/redact.ts src/prompts.ts --format esm --target node18 --out-dir test/dist --clean --silent",
+    "tokens": "node scripts/tool-tokens.mjs",
+    "bundle": "node scripts/build-mcpb.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -46,6 +51,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "linkedom": "^0.18.15",
     "tsup": "^8",
     "typescript": "^5"
   },

@@ -1,0 +1,453 @@
+{
+ "asOf": "2026-11-21",
+ "service": "https://captcha.browsa.io",
+ "types": [
+  {
+   "type": "ImageToTextTask",
+   "title": "Image text",
+   "kind": "recognition",
+   "family": "image_text",
+   "status": "live",
+   "required": [],
+   "oneOf": [
+    [
+     "body",
+     "images"
+    ]
+   ],
+   "optional": [
+    "module",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.004
+  },
+  {
+   "type": "ReCaptchaV2Classification",
+   "title": "reCAPTCHA v2 grid classification",
+   "kind": "recognition",
+   "family": "recaptcha_grid",
+   "status": "live",
+   "required": [
+    "image",
+    "question"
+   ],
+   "oneOf": [],
+   "optional": [
+    "size",
+    "escalate",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "AwsWafClassification",
+   "title": "AWS WAF grid classification",
+   "kind": "recognition",
+   "family": "aws_waf",
+   "status": "live",
+   "required": [
+    "images",
+    "question"
+   ],
+   "oneOf": [],
+   "optional": [
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "VisionEngine",
+   "title": "Slider gap (vision model)",
+   "kind": "recognition",
+   "family": "slider",
+   "status": "off",
+   "offReason": "switched off until a measured run passes",
+   "required": [
+    "module",
+    "imageBackground"
+   ],
+   "oneOf": [],
+   "optional": [
+    "image"
+   ],
+   "proxy": "none",
+   "credits": 0.008
+  },
+  {
+   "type": "GeeTestSlide",
+   "title": "GeeTest slide (v3 and v4)",
+   "kind": "recognition",
+   "family": "geetest_slide",
+   "status": "live",
+   "required": [
+    "version",
+    "imageBackground",
+    "imageFull",
+    "imageSlice",
+    "top",
+    "bgCssWidth"
+   ],
+   "oneOf": [],
+   "optional": [
+    "cssWidth",
+    "shuffled",
+    "sliceCssWidth",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.008
+  },
+  {
+   "type": "AltchaTask",
+   "title": "ALTCHA proof of work",
+   "kind": "recognition",
+   "family": "altcha",
+   "status": "off",
+   "offReason": "switched off until a measured run passes",
+   "required": [
+    "challenge"
+   ],
+   "oneOf": [],
+   "optional": [
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.004
+  },
+  {
+   "type": "RotateTask",
+   "title": "Rotate the disc",
+   "kind": "recognition",
+   "family": "rotate",
+   "status": "off",
+   "offReason": "switched off until a measured run passes",
+   "required": [
+    "imageDisc",
+    "imageBackground"
+   ],
+   "oneOf": [],
+   "optional": [
+    "discCssWidth",
+    "bgCssWidth",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.008
+  },
+  {
+   "type": "ClickOrderTask",
+   "title": "Click in order",
+   "kind": "recognition",
+   "family": "click_order",
+   "status": "off",
+   "offReason": "switched off until a measured run passes",
+   "required": [
+    "image"
+   ],
+   "oneOf": [],
+   "optional": [
+    "references",
+    "order",
+    "count",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "TextCaptchaTask",
+   "title": "Question in words",
+   "kind": "recognition",
+   "family": "text_question",
+   "status": "live",
+   "required": [
+    "comment"
+   ],
+   "oneOf": [],
+   "optional": [
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.004
+  },
+  {
+   "type": "BoundingBoxTask",
+   "title": "Box around an object",
+   "kind": "recognition",
+   "family": "bounding_box",
+   "status": "live",
+   "required": [
+    "body",
+    "comment"
+   ],
+   "oneOf": [],
+   "optional": [
+    "many",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "DrawAroundTask",
+   "title": "Line drawn around an object",
+   "kind": "recognition",
+   "family": "draw_around",
+   "status": "off",
+   "offReason": "switched off until a measured run passes",
+   "required": [
+    "body",
+    "comment"
+   ],
+   "oneOf": [],
+   "optional": [
+    "many",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "DragDropTask",
+   "title": "Drag pieces into the picture",
+   "kind": "recognition",
+   "family": "drag_drop",
+   "status": "live",
+   "required": [
+    "body",
+    "pieces"
+   ],
+   "oneOf": [],
+   "optional": [
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "AntiTurnstileTaskProxyLess",
+   "title": "Cloudflare Turnstile token",
+   "kind": "token",
+   "family": "turnstile",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey"
+   ],
+   "oneOf": [],
+   "optional": [
+    "metadata",
+    "userAgent"
+   ],
+   "proxy": "none",
+   "credits": 0.008
+  },
+  {
+   "type": "AntiTurnstileTask",
+   "title": "Cloudflare Turnstile token (your proxy)",
+   "kind": "token",
+   "family": "turnstile",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey",
+    "proxy"
+   ],
+   "oneOf": [],
+   "optional": [
+    "metadata",
+    "userAgent"
+   ],
+   "proxy": "required",
+   "credits": 0.008
+  },
+  {
+   "type": "ReCaptchaV3TaskProxyLess",
+   "title": "reCAPTCHA v3 token",
+   "kind": "token",
+   "family": "recaptcha_v3",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey"
+   ],
+   "oneOf": [],
+   "optional": [
+    "pageAction",
+    "apiDomain",
+    "minScore",
+    "enterprisePayload",
+    "userAgent"
+   ],
+   "proxy": "none",
+   "credits": 0.008
+  },
+  {
+   "type": "ReCaptchaV3Task",
+   "title": "reCAPTCHA v3 token (your proxy)",
+   "kind": "token",
+   "family": "recaptcha_v3",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey",
+    "proxy"
+   ],
+   "oneOf": [],
+   "optional": [
+    "pageAction",
+    "apiDomain",
+    "minScore",
+    "enterprisePayload",
+    "userAgent"
+   ],
+   "proxy": "required",
+   "credits": 0.008
+  },
+  {
+   "type": "ReCaptchaV3EnterpriseTaskProxyLess",
+   "title": "reCAPTCHA v3 Enterprise token",
+   "kind": "token",
+   "family": "recaptcha_v3_enterprise",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey"
+   ],
+   "oneOf": [],
+   "optional": [
+    "pageAction",
+    "apiDomain",
+    "minScore",
+    "enterprisePayload",
+    "userAgent"
+   ],
+   "proxy": "none",
+   "credits": 0.012
+  },
+  {
+   "type": "ReCaptchaV3EnterpriseTask",
+   "title": "reCAPTCHA v3 Enterprise token (your proxy)",
+   "kind": "token",
+   "family": "recaptcha_v3_enterprise",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey",
+    "proxy"
+   ],
+   "oneOf": [],
+   "optional": [
+    "pageAction",
+    "apiDomain",
+    "minScore",
+    "enterprisePayload",
+    "userAgent"
+   ],
+   "proxy": "required",
+   "credits": 0.012
+  },
+  {
+   "type": "ReCaptchaV2TaskProxyLess",
+   "title": "reCAPTCHA v2 token",
+   "kind": "token",
+   "family": "recaptcha_v2",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey"
+   ],
+   "oneOf": [],
+   "optional": [
+    "isInvisible",
+    "apiDomain",
+    "enterprisePayload",
+    "userAgent"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "ReCaptchaV2Task",
+   "title": "reCAPTCHA v2 token (your proxy)",
+   "kind": "token",
+   "family": "recaptcha_v2",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey",
+    "proxy"
+   ],
+   "oneOf": [],
+   "optional": [
+    "isInvisible",
+    "apiDomain",
+    "enterprisePayload",
+    "userAgent"
+   ],
+   "proxy": "required",
+   "credits": 0.01
+  },
+  {
+   "type": "ReCaptchaV2EnterpriseTaskProxyLess",
+   "title": "reCAPTCHA v2 Enterprise token",
+   "kind": "token",
+   "family": "recaptcha_v2_enterprise",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey"
+   ],
+   "oneOf": [],
+   "optional": [
+    "isInvisible",
+    "apiDomain",
+    "enterprisePayload",
+    "userAgent"
+   ],
+   "proxy": "none",
+   "credits": 0.012
+  },
+  {
+   "type": "ReCaptchaV2EnterpriseTask",
+   "title": "reCAPTCHA v2 Enterprise token (your proxy)",
+   "kind": "token",
+   "family": "recaptcha_v2_enterprise",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "websiteKey",
+    "proxy"
+   ],
+   "oneOf": [],
+   "optional": [
+    "isInvisible",
+    "apiDomain",
+    "enterprisePayload",
+    "userAgent"
+   ],
+   "proxy": "required",
+   "credits": 0.012
+  },
+  {
+   "type": "AntiCloudflareTask",
+   "title": "Cloudflare full-page check",
+   "kind": "token",
+   "family": "cloudflare",
+   "status": "live",
+   "required": [
+    "websiteURL",
+    "proxy"
+   ],
+   "oneOf": [],
+   "optional": [
+    "userAgent"
+   ],
+   "proxy": "required",
+   "credits": 0.012
+  }
+ ]
+}

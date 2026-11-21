@@ -26,6 +26,13 @@ RECAPTCHA_V2_CLASSIFICATION = "ReCaptchaV2Classification"
 AWS_WAF_CLASSIFICATION = "AwsWafClassification"
 VISION_ENGINE = "VisionEngine"
 GEETEST_SLIDE = "GeeTestSlide"
+ROTATE = "RotateTask"              # refused by the service until measured through it (2026-11-21)
+CLICK_ORDER = "ClickOrderTask"     # refused by the service until measured through it (2026-11-21)
+ALTCHA = "AltchaTask"              # refused by the service until measured through it (2026-11-21)
+TEXT_QUESTION = "TextCaptchaTask"  # these four: refused by the service until switched on (2026-11-21)
+BOUNDING_BOX = "BoundingBoxTask"
+DRAW_AROUND = "DrawAroundTask"
+DRAG_DROP = "DragDropTask"
 CLOUDFLARE_CHALLENGE = "AntiCloudflareTask"
 
 # The live list, with parameters, prices and measured numbers: CaptchaClient.list_types()
@@ -55,6 +62,13 @@ _alias(["ReCaptchaV2Classification"], RECAPTCHA_V2_CLASSIFICATION)
 _alias(["AwsWafClassification"], AWS_WAF_CLASSIFICATION)
 _alias(["VisionEngine"], VISION_ENGINE)
 _alias(["GeeTestSlide"], GEETEST_SLIDE)
+_alias(["RotateTask"], ROTATE)
+_alias(["ClickOrderTask"], CLICK_ORDER)
+_alias(["AltchaTask", "altcha"], ALTCHA)
+_alias(["TextCaptchaTask"], TEXT_QUESTION)
+_alias(["BoundingBoxTask"], BOUNDING_BOX)
+_alias(["DrawAroundTask"], DRAW_AROUND)
+_alias(["DragDropTask"], DRAG_DROP)
 _alias(["AntiCloudflareTask"], CLOUDFLARE_CHALLENGE)
 # Already proxyless names stay proxyless
 _alias(["ReCaptchaV2TaskProxyLess", "NoCaptchaTaskProxyless"], "ReCaptchaV2TaskProxyLess")

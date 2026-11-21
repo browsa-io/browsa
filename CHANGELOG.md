@@ -2,6 +2,31 @@
 
 Covers the three packages: npm `browsa`, npm `@browsa/mcp` and PyPI `browsa`. They share a version number.
 
+## 0.8.0 (`@browsa/mcp` only; prepared 2026-11-21, not published)
+
+No breaking change: the default tool list is the same nine tools, and every existing tool keeps its name, arguments and answers. Everything new is off until its group or variable is set, except retries.
+
+### Added
+
+- **Captcha solving for a browser of your own: the `captcha_page` group** (`BROWSA_MCP_TOOLS=captcha_page`).
+  - `detect_captcha`: the page's HTML in (with its address and, optionally, its frame and script URLs), the captchas found out: the catalogue's task type name, site key and parameters, `status` from the type catalogue, which tool takes it, and what is missing. Runs in the server process: no request, no key, free. It reports a captcha only when its provider is in the page; text that mentions captchas, class names and code samples give nothing.
+  - `solve_captcha_on_page`: one token task through the captcha API with the held wait, answered with the solution, `cost`, and an `apply` block for the caller's browser: a JavaScript expression that sets the token where the widget keeps it and calls the page's callback, or, for a cookie answer, the cookies and user agent to set before re-requesting the URL. Picture puzzles, types that are off and types the catalogue does not list are refused before anything is sent.
+  - `captcha_allowance`: what is left under the local limits.
+- **Local limits for captcha solves**, off unless set: `BROWSA_CAPTCHA_MAX_CREDITS` (session spend), `BROWSA_CAPTCHA_RATE_PER_MINUTE`, `BROWSA_CAPTCHA_CONCURRENCY`. They cover `solve_captcha_on_page` and `solve_captcha_task`. A refused call names the limit and says when to retry (`code: LOCAL_LIMIT`, `limit`, `retry_after_seconds`).
+- **`-name` in `BROWSA_MCP_TOOLS`** takes a group or a tool off; `-core` takes the nine browser tools off. `captcha_page,-core` lists three tools, about 510 tokens of definitions (the default nine are about 1,240; `npm run tokens` measures every group, as characters / 4).
+- **Prompts** (`prompts/list`, `prompts/get`): `solve_captcha_on_my_page`, `what_captcha_is_this`, `pass_check_in_browsa_browser`, each listed only when its tools are on.
+- **Retries:** a `429`, or the captcha key's per-minute limit, is retried with the server's `Retry-After` (up to 30 s) or exponential backoff with jitter; a gateway `5xx` or a dropped connection only for calls that change nothing. A call that may have been carried out is never sent twice. `BROWSA_MCP_RETRIES` (default 2, `0` for none). This applies to the server's own calls (core tools, robots, the captcha tools), not to the tools that go through the `browsa` SDK client.
+- **Starts offline:** the captcha type list starts from a snapshot bundled with the package (`scripts/update-catalogue.mjs` refreshes it before a release) and is replaced by the live list when a fetch succeeds.
+- `detect_captcha`, `captcha_allowance` and `list_captcha_types` answer without `BROWSA_API_KEY`.
+- Packaging: `manifest.json` (MCP Bundle) with `npm run bundle`; `SECURITY.md` and a "What leaves your machine" section; install snippets for more clients; `server.json` lists the new variables.
+
+### Changed
+
+- Optional variables given as empty strings (as install forms pass them) are read as unset.
+- `report_captcha_result`: the description and the README now say that an incorrect report refunds that solve once, within the workspace's report limits (refunds are on at the API since 2026-11-21). The tool and its answer are unchanged: `refunded` says whether a refund was made.
+- The bundled captcha type list is the catalogue of 2026-11-21 (23 types, 18 live).
+- A server with a `captcha_page` tool listed fetches the public type list once at startup (`GET /types`, no key, no parameters, not waited for). The default server makes no request at startup, as before.
+
 ## 0.7.0 (2026-11-21)
 
 All three packages. 0.6.0 of npm `browsa` and PyPI `browsa` and 0.6.1 of `@browsa/mcp` were prepared on 2026-11-19 and never published; everything they had ships here. `@browsa/mcp` still depends on `browsa` ^0.3.1: it calls the API itself and reads the new job fields from the raw job.

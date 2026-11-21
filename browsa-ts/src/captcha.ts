@@ -52,7 +52,9 @@ export class CaptchaTimeoutError extends CaptchaError {
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-export type RecognitionTaskType = "ImageToTextTask" | "ReCaptchaV2Classification" | "AwsWafClassification" | "VisionEngine" | "GeeTestSlide";
+export type RecognitionTaskType = "ImageToTextTask" | "ReCaptchaV2Classification" | "AwsWafClassification" | "VisionEngine" | "GeeTestSlide"
+  | "RotateTask" | "ClickOrderTask" | "AltchaTask"
+  | "TextCaptchaTask" | "BoundingBoxTask" | "DrawAroundTask" | "DragDropTask";
 export type TokenTaskType =
   | "ReCaptchaV2TaskProxyLess" | "ReCaptchaV2Task"
   | "ReCaptchaV2EnterpriseTaskProxyLess" | "ReCaptchaV2EnterpriseTask"
@@ -65,6 +67,8 @@ export type CaptchaTaskType = RecognitionTaskType | TokenTaskType;
 /** The live list, with parameters, prices and measured numbers: `CaptchaClient.listTypes()`. */
 export const CAPTCHA_TASK_TYPES: CaptchaTaskType[] = [
   "ImageToTextTask", "ReCaptchaV2Classification", "AwsWafClassification", "VisionEngine", "GeeTestSlide",
+  "RotateTask", "ClickOrderTask", "AltchaTask",
+  "TextCaptchaTask", "BoundingBoxTask", "DrawAroundTask", "DragDropTask",
   "ReCaptchaV2TaskProxyLess", "ReCaptchaV2Task", "ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTask",
   "ReCaptchaV3TaskProxyLess", "ReCaptchaV3Task", "ReCaptchaV3EnterpriseTaskProxyLess", "ReCaptchaV3EnterpriseTask",
   "AntiTurnstileTaskProxyLess", "AntiTurnstileTask", "AntiCloudflareTask",
@@ -115,6 +119,13 @@ alias(["ReCaptchaV2Classification"], "ReCaptchaV2Classification");
 alias(["AwsWafClassification"], "AwsWafClassification");
 alias(["VisionEngine"], "VisionEngine");
 alias(["GeeTestSlide"], "GeeTestSlide");
+alias(["RotateTask"], "RotateTask");
+alias(["ClickOrderTask"], "ClickOrderTask");
+alias(["AltchaTask", "altcha"], "AltchaTask");
+alias(["TextCaptchaTask"], "TextCaptchaTask");
+alias(["BoundingBoxTask"], "BoundingBoxTask");
+alias(["DrawAroundTask"], "DrawAroundTask");
+alias(["DragDropTask"], "DragDropTask");
 alias(["AntiCloudflareTask"], "AntiCloudflareTask");
 alias(["ReCaptchaV2TaskProxyLess", "NoCaptchaTaskProxyless"], "ReCaptchaV2TaskProxyLess");
 alias(["ReCaptchaV2EnterpriseTaskProxyLess"], "ReCaptchaV2EnterpriseTaskProxyLess");
