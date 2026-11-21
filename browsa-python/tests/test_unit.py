@@ -1060,3 +1060,33 @@ def test_async_downloads_and_live_link():
 
     assert asyncio.run(run()) == []
     assert c._sync._t.calls[1] == ("POST", "/v1/agents/agt_1/live", {"scope": "view"})
+
+
+# ─── connect(): CDP addresses (no network: the transport is replaced) ────
+
+
+def test_connect_uses_the_api_cdp_address_whatever_its_host():
+    from browsa import Client
+    c = Client(api_key="agt_live_test")
+    for host in ("browsa.io", "cdp.browsa.io"):
+        c._t = _RecordingTransport({
+            "id": "agt_1", "status": "running", "profile_id": "p1",
+            "cdp_http": f"https://{host}/api/v1/cdp/p1",
+            "cdp_url": f"wss://{host}/api/v1/cdp/p1/ws/page/T1",
+        })
+        c._t.api_key = "agt_live_test"
+        out = c.connect("agt_1", framework="curl")
+        assert out["cdp_http"] == f"https://{host}/api/v1/cdp/p1"
+        assert out["cdp_url"] == f"wss://{host}/api/v1/cdp/p1/ws/page/T1"
+        assert f"https://{host}/api/v1/cdp/p1/json/version" in out["snippet"]
+
+
+def test_connect_fallback_is_the_cdp_host():
+    from browsa import Client
+    c = Client(api_key="agt_live_test")
+    c._t = _RecordingTransport({"id": "agt_1", "status": "running", "profile_id": "p1"})
+    c._t.api_key = "agt_live_test"
+    out = c.connect("agt_1", framework="playwright_py")
+    assert out["cdp_http"] == "https://cdp.browsa.io/api/v1/cdp/p1"
+    assert out["cdp_url"] == "wss://cdp.browsa.io/api/v1/cdp/p1/ws/page/..."
+    assert "browsa.io/api" not in out["snippet"].replace("cdp.browsa.io/api", "")

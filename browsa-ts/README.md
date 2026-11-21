@@ -142,10 +142,34 @@ const csv = await c.robotRuns.export(run.id);          // or { format: "json" }
 | | |
 |---|---|
 | Price | `robot.health.priceCredits` per successful row, the same as the agent task. Failed rows are free. |
-| Settings | `model` (records and repairs), `proxy` (Browsa's network: datacenter 5, residential 50 credits/GB; or a saved `proxyId`, free), `browser` (`os`, `screen`). Unset is Auto. |
+| Settings | `model` (records and repairs), `proxy` (Browsa's network: datacenter 5, residential 50 credits/GB; or a saved `proxyId`, free), `browser` (`os`, `screen`), `secrets` (names of workspace secrets every row may type). Unset is Auto. `update({ settings })` changes only the parts you pass. |
 | More | `list`, `get`, `update`, `delete`, `pause`, `resume`, `runs`, `alerts`, `markAlertsRead`. Recipes alone: `createRecipe`, `runRecipe`, `getRecipeRun`. |
 
 Guide: <https://browsa.io/guides/robots>.
+
+## Secrets
+
+One vault per workspace for what an agent types but must never read: logins (with an optional one-time-code seed), one-time-code seeds and plain values. Values are write-only, and a secret is typed only on its `origins`.
+
+```ts
+await client.secrets.create({
+  name: "GITHUB_LOGIN", type: "login", origins: ["github.com"],
+  username: "release-bot", password: process.env.GH_PASSWORD!,
+  description: "Bot account for the release checks",
+});
+
+const job = await client.runTask({
+  task: "Log in to github.com with secrets.GITHUB_LOGIN and list my open pull requests",
+  llm: "browsa",
+  secretIds: ["GITHUB_LOGIN"], // attachment is explicit
+});
+```
+
+In the task text: `secrets.NAME`, `secrets.NAME.username`, `secrets.NAME.password`, `secrets.NAME.totp`. A reference to a secret that is not in `secretIds` is 400 `SECRET_NOT_ATTACHED`. `secretIds` also works on `auto`, `createSchedule`, `runRecipe` and `sendMessage`; `act(id, { action: "type", id: 14, secret: "GITHUB_LOGIN:password" })` types one into a field.
+
+When a run creates a login (a signup), it is saved as a secret: `job.savedSecrets` lists what was saved (`name`, `id`, `type`, `origins`, `usernameMasked`, `existing`) and `job.secretsNotSaved` says why not (`code`, `message`). Pass `saveSecrets: false` to opt out.
+
+More: `list`, `get`, `update`, `delete(name, { force: true })`, `importEnv`, `usage`, `keypair` (to seal values with your own HPKE library; plain values over TLS are accepted). Changing secrets needs a key with the `secrets:write` scope.
 
 ## Webhooks
 
@@ -291,6 +315,22 @@ await cap.getBalance();                    // credits
 Builders: `imageToText`, `recaptchaV2`, `recaptchaV3`, `turnstile`, `recaptchaV2Classification` (and `awsWafClassification`, `slider`). Each takes `proxy` (a URL string or `{ type, host, port, username, password }`); without one the proxyless type is used.
 
 A task copied from code for another service works as it is: `RecaptchaV2TaskProxyless`, `TurnstileTask`, `NoCaptchaTaskProxyless` and the like are sent under Browsa's names (`normalizeCaptchaTask`). Errors throw `CaptchaError` with the API's `code`.
+
+`solve` does not poll on a timer: it asks the API to hold each call until the task ends, so a 7 s solve is answered at 7 s. The solution says what it cost and how long it took, and you can report whether the site took it:
+
+```ts
+const sol = await cap.solve(tasks.turnstile("https://example.com", "0x4AAAA..."));
+sol.cost;            // { charged: true, amount: 0.008, unit: "credits", note: "Charged once, for this solve." }
+sol.solveSeconds;    // 6.42
+await cap.reportCorrect(sol.taskId);     // the site took it
+// await cap.reportIncorrect(sol.taskId); // or: the site refused it (one report per task, within 15 minutes)
+
+for (const t of await cap.listTypes()) { // every type: status, parameters, price, measured pass rate (no key sent)
+  console.log(t.type, t.status, t.price.creditsPerSolve, t.required.map((p) => p.name));
+}
+```
+
+More builders: `geetestSlideV3`, `geetestSlideV4`, `cloudflareChallenge`. A failed solve is free; `CaptchaError` carries `fix` (what to change) and `charged`. Reports are recorded and used to improve solving.
 
 Coming from a library that cannot be pointed at another server:
 

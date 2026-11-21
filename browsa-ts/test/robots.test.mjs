@@ -68,7 +68,7 @@ test("robots.create sends snake_case, nested settings and schedule", async () =>
   assert.equal(rb.inputs.length, 2);
   assert.equal(rb.schedule.intervalSeconds, 86400);
   assert.equal(rb.schedule.at, "09:00");
-  assert.deepEqual(rb.settings, { model: { llm: "browsa-smart" }, proxy: { network: "residential", country: "us" }, browser: null });
+  assert.deepEqual(rb.settings, { model: { llm: "browsa-smart" }, proxy: { network: "residential", country: "us" }, browser: null, secrets: [] });
   assert.equal(rb.health.passRate, 0.5);
   assert.equal(rb.health.priceCredits, 3);
   assert.equal(rb.health.lastFailure, "blocked");
@@ -82,7 +82,7 @@ test("robots.create from a recipe", async () => {
   const c = client({ "POST /v1/robots": async () => json({ ...robotBody, settings: { model: null, proxy: null, browser: null } }, 201) }, seen);
   const rb = await c.robots.create({ name: "x", recipeId: "r9" });
   assert.deepEqual(seen[0].body, { name: "x", recipe_id: "r9" });
-  assert.deepEqual(rb.settings, { model: null, proxy: null, browser: null });
+  assert.deepEqual(rb.settings, { model: null, proxy: null, browser: null, secrets: [] });
 });
 
 test("robots.list, get, pause, resume, delete", async () => {
@@ -107,9 +107,73 @@ test("robots.update sends only given fields; null clears schedule and settings",
   const seen = [];
   const c = client({ "PATCH /v1/robots/rb1": async () => json(robotBody) }, seen);
   await c.robots.update("rb1", { name: "New", schedule: null, settings: null });
+  // settings: null resets everything: no read first.
+  assert.deepEqual(seen.map((s) => s.key), ["PATCH /v1/robots/rb1"]);
   assert.deepEqual(seen[0].body, { name: "New", schedule: null, settings: null });
-  await c.robots.update("rb1", { settings: { proxy: { network: "datacenter" } }, profileId: null });
-  assert.deepEqual(seen[1].body, { settings: { proxy: { network: "datacenter" } }, profile_id: null });
+  await c.robots.update("rb1", { name: "Only name", profileId: null });
+  assert.deepEqual(seen[1].body, { name: "Only name", profile_id: null });
+});
+
+// The API's PATCH replaces settings whole, so a settings update reads the
+// robot and sends its settings with the new parts over them.
+const secretRobot = {
+  ...robotBody,
+  settings: {
+    model: { llm: "browsa-smart" }, proxy: { network: "residential", country: "us" },
+    browser: { os: "mac", screen: "1440x900" }, secrets: ["DUMMY_LOGIN", "DUMMY_TOKEN"],
+  },
+};
+
+test("robots.update with only a proxy keeps settings.secrets and the other parts", async () => {
+  const seen = [];
+  const c = client({
+    "GET /v1/robots/rb1": async () => json(secretRobot),
+    "PATCH /v1/robots/rb1": async () => json(secretRobot),
+  }, seen);
+  const rb = await c.robots.update("rb1", { settings: { proxy: { network: "datacenter" } }, profileId: null });
+  assert.deepEqual(seen.map((s) => s.key), ["GET /v1/robots/rb1", "PATCH /v1/robots/rb1"]);
+  assert.deepEqual(seen[1].body, {
+    settings: {
+      model: { llm: "browsa-smart" }, proxy: { network: "datacenter" },
+      browser: { os: "mac", screen: "1440x900" }, secrets: ["DUMMY_LOGIN", "DUMMY_TOKEN"],
+    },
+    profile_id: null,
+  });
+  assert.deepEqual(rb.settings.secrets, ["DUMMY_LOGIN", "DUMMY_TOKEN"]);
+});
+
+test("robots.update: a null part goes Auto, secrets can be replaced, a robot without settings works", async () => {
+  const seen = [];
+  let current = secretRobot;
+  const c = client({
+    "GET /v1/robots/rb1": async () => json(current),
+    "PATCH /v1/robots/rb1": async () => json(robotBody),
+  }, seen);
+  await c.robots.update("rb1", { settings: { model: null, secrets: ["DUMMY_TOKEN"] } });
+  assert.deepEqual(seen[1].body.settings, {
+    model: null, proxy: { network: "residential", country: "us" },
+    browser: { os: "mac", screen: "1440x900" }, secrets: ["DUMMY_TOKEN"],
+  });
+  current = { ...robotBody, settings: null };
+  await c.robots.update("rb1", { settings: { secrets: ["DUMMY_LOGIN"] } });
+  assert.deepEqual(seen[3].body, { settings: { secrets: ["DUMMY_LOGIN"] } });
+});
+
+test("robots.create sends settings.secrets; get parses secrets and settingsWarnings", async () => {
+  const seen = [];
+  const c = client({
+    "POST /v1/robots": async () => json(secretRobot, 201),
+    "GET /v1/robots/rb1": async () => json({
+      ...secretRobot,
+      settings_warnings: [{ code: "SECRET_NOT_FOUND", secret: "LATER_KEY", message: "LATER_KEY is not in this workspace's Secrets." }],
+    }),
+  }, seen);
+  await c.robots.create({ name: "x", recipeId: "r9", settings: { secrets: ["DUMMY_LOGIN"] } });
+  assert.deepEqual(seen[0].body.settings, { secrets: ["DUMMY_LOGIN"] });
+  const rb = await c.robots.get("rb1");
+  assert.deepEqual(rb.settings.secrets, ["DUMMY_LOGIN", "DUMMY_TOKEN"]);
+  assert.equal(rb.settingsWarnings[0].code, "SECRET_NOT_FOUND");
+  assert.equal(rb.settingsWarnings[0].secret, "LATER_KEY");
 });
 
 test("robots.run, runs, alerts, markAlertsRead", async () => {

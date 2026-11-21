@@ -20,18 +20,25 @@ export const DEFAULT_CAPTCHA_URL = "https://captcha.browsa.io";
 const DEFAULT_TIMEOUT = 30_000;
 const DEFAULT_SOLVE_TIMEOUT = 180_000;
 const DEFAULT_POLL_MS = 3_000;
+const DEFAULT_WAIT_SECONDS = 20; // how long the API is asked to hold one call (it allows up to 25)
 const USER_AGENT = `browsa-ts/${VERSION} (captcha)`;
 
 // ── Errors ───────────────────────────────────────────────────────────────
 
 /** The API answered errorId 1. `code` is its errorCode (ERROR_CAPTCHA_UNSOLVABLE,
- * ERROR_ZERO_BALANCE, ...). Failed and unsolvable tasks are not charged. */
+ * ERROR_ZERO_BALANCE, ...); `fix` says what to change and `charged` whether the request
+ * cost anything. Failed and unsolvable tasks are not charged. */
 export class CaptchaError extends BrowsaError {
   taskId?: string;
+  fix?: string;
+  charged: boolean;
   constructor(message: string, opts: { code?: string; taskId?: string; status?: number; body?: unknown } = {}) {
     super(message, opts);
     this.name = "CaptchaError";
     this.taskId = opts.taskId;
+    const b = (opts.body && typeof opts.body === "object" ? opts.body : {}) as Record<string, unknown>;
+    this.fix = typeof b.fix === "string" ? b.fix : undefined;
+    this.charged = b.charged === true;
   }
 }
 
@@ -45,20 +52,22 @@ export class CaptchaTimeoutError extends CaptchaError {
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-export type RecognitionTaskType = "ImageToTextTask" | "ReCaptchaV2Classification" | "AwsWafClassification" | "VisionEngine";
+export type RecognitionTaskType = "ImageToTextTask" | "ReCaptchaV2Classification" | "AwsWafClassification" | "VisionEngine" | "GeeTestSlide";
 export type TokenTaskType =
   | "ReCaptchaV2TaskProxyLess" | "ReCaptchaV2Task"
   | "ReCaptchaV2EnterpriseTaskProxyLess" | "ReCaptchaV2EnterpriseTask"
   | "ReCaptchaV3TaskProxyLess" | "ReCaptchaV3Task"
   | "ReCaptchaV3EnterpriseTaskProxyLess" | "ReCaptchaV3EnterpriseTask"
-  | "AntiTurnstileTaskProxyLess" | "AntiTurnstileTask";
+  | "AntiTurnstileTaskProxyLess" | "AntiTurnstileTask"
+  | "AntiCloudflareTask";
 export type CaptchaTaskType = RecognitionTaskType | TokenTaskType;
 
+/** The live list, with parameters, prices and measured numbers: `CaptchaClient.listTypes()`. */
 export const CAPTCHA_TASK_TYPES: CaptchaTaskType[] = [
-  "ImageToTextTask", "ReCaptchaV2Classification", "AwsWafClassification", "VisionEngine",
+  "ImageToTextTask", "ReCaptchaV2Classification", "AwsWafClassification", "VisionEngine", "GeeTestSlide",
   "ReCaptchaV2TaskProxyLess", "ReCaptchaV2Task", "ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTask",
   "ReCaptchaV3TaskProxyLess", "ReCaptchaV3Task", "ReCaptchaV3EnterpriseTaskProxyLess", "ReCaptchaV3EnterpriseTask",
-  "AntiTurnstileTaskProxyLess", "AntiTurnstileTask",
+  "AntiTurnstileTaskProxyLess", "AntiTurnstileTask", "AntiCloudflareTask",
 ];
 
 export interface TokenSolution { gRecaptchaResponse: string; userAgent?: string; createTime?: number }
@@ -67,12 +76,30 @@ export interface TextSolution { text?: string; answers?: string[] }
 export interface GridSolution { type: "multi" | "single"; objects?: number[]; size: number; hasObject?: boolean }
 export interface AwsWafSolution { objects: number[] }
 export interface SliderSolution { distance: number }
+export interface GeeTestSlideSolution { distance: number; x: number }
+export interface CloudflareSolution { cookies: Record<string, string>; token: string; type?: "challenge"; userAgent?: string }
+
+/** What a solve cost, as the API states it. */
+export interface CaptchaCost { charged: boolean; amount: number; unit: "credits" | "usd"; credits?: number; refunded?: number; note?: string }
+
+/** One entry of the type catalogue (GET /types). */
+export interface CaptchaTypeInfo {
+  type: string; title: string; summary: string; kind: "recognition" | "token"; status: "live" | "off"; offReason?: string;
+  required: { name: string; type: string; description: string }[];
+  optional: { name: string; type: string; description: string }[];
+  price: { usdPer1000: number; creditsPerSolve: number };
+  measured: { row: string; attempts: number; passes: number; passRate: number; medianSeconds: number | null; measuredOn: string; exit?: string }[];
+  [k: string]: unknown;
+}
+
+/** The answer to a report. */
+export interface CaptchaReport { taskId: string; outcome: "correct" | "incorrect"; refunded: boolean; refund: { amount: number; unit: string }; message: string }
 
 /** A task object for createTask. `S` is the solution shape it returns (type only). */
 export type CaptchaTask<S = Record<string, unknown>> = { type: string; [field: string]: unknown } & { readonly __solution?: S };
 
-/** A solution, with the task id as a non-enumerable `taskId`. */
-export type Solved<S> = S & { readonly taskId: string };
+/** A solution, with the task id, its cost and its time as non-enumerable `taskId`, `cost`, `solveSeconds`. */
+export type Solved<S> = S & { readonly taskId: string; readonly cost?: CaptchaCost; readonly solveSeconds?: number };
 
 /** Browsa's proxy object, or a "http://user:pass@host:port" / "http:host:port:user:pass" string. */
 export type CaptchaProxy = string | { type?: string; host: string; port: number; username?: string; password?: string };
@@ -87,6 +114,8 @@ alias(["ImageToTextTask"], "ImageToTextTask");
 alias(["ReCaptchaV2Classification"], "ReCaptchaV2Classification");
 alias(["AwsWafClassification"], "AwsWafClassification");
 alias(["VisionEngine"], "VisionEngine");
+alias(["GeeTestSlide"], "GeeTestSlide");
+alias(["AntiCloudflareTask"], "AntiCloudflareTask");
 alias(["ReCaptchaV2TaskProxyLess", "NoCaptchaTaskProxyless"], "ReCaptchaV2TaskProxyLess");
 alias(["ReCaptchaV2EnterpriseTaskProxyLess"], "ReCaptchaV2EnterpriseTaskProxyLess");
 alias(["ReCaptchaV3TaskProxyLess"], "ReCaptchaV3TaskProxyLess");
@@ -195,7 +224,7 @@ export const captchaTasks = {
     if (opts.websiteURL) t.websiteURL = opts.websiteURL;
     return t as CaptchaTask<GridSolution>;
   },
-  /** Which tiles of an AWS WAF grid show the object. Off on the API until a measured run passes. */
+  /** Which tiles of an AWS WAF grid show the object. */
   awsWafClassification(images: ImageInput[], question: string): CaptchaTask<AwsWafSolution> {
     return { type: "AwsWafClassification", images: images.map(b64),
       question: question.startsWith("aws:grid:") ? question : `aws:grid:${question}` } as CaptchaTask<AwsWafSolution>;
@@ -205,6 +234,28 @@ export const captchaTasks = {
     const t: Record<string, unknown> = { type: "VisionEngine", module: "slider_1", imageBackground: b64(imageBackground) };
     if (image != null) t.image = b64(image);
     return t as CaptchaTask<SliderSolution>;
+  },
+  /** How far to drag a GeeTest v3 slide puzzle, from the two pictures it serves, as downloaded. */
+  geetestSlideV3(imageBackground: ImageInput, imageFull: ImageInput, opts: { cssWidth?: number; shuffled?: boolean } = {}): CaptchaTask<GeeTestSlideSolution> {
+    const t: Record<string, unknown> = { type: "GeeTestSlide", version: 3, imageBackground: b64(imageBackground), imageFull: b64(imageFull) };
+    if (opts.cssWidth != null) t.cssWidth = opts.cssWidth;
+    if (opts.shuffled === false) t.shuffled = false;
+    return t as CaptchaTask<GeeTestSlideSolution>;
+  },
+  /** How far to drag a GeeTest v4 slide puzzle: background, the piece's PNG, its top offset and the background's width (CSS px). */
+  geetestSlideV4(imageBackground: ImageInput, imageSlice: ImageInput, opts: { top: number; bgCssWidth: number; sliceCssWidth?: number }): CaptchaTask<GeeTestSlideSolution> {
+    const t: Record<string, unknown> = { type: "GeeTestSlide", version: 4, imageBackground: b64(imageBackground),
+      imageSlice: b64(imageSlice), top: opts.top, bgCssWidth: opts.bgCssWidth };
+    if (opts.sliceCssWidth != null) t.sliceCssWidth = opts.sliceCssWidth;
+    return t as CaptchaTask<GeeTestSlideSolution>;
+  },
+  /** Pass a page's Cloudflare full-page check through your proxy (required: the cookie only works from the address that passed). */
+  cloudflareChallenge(websiteURL: string, proxy: CaptchaProxy, opts: { userAgent?: string } = {}): CaptchaTask<CloudflareSolution> {
+    const p = captchaProxyString(proxy);
+    if (!websiteURL || !p) throw new TypeError("websiteURL and proxy are required");
+    const t: Record<string, unknown> = { type: "AntiCloudflareTask", websiteURL, proxy: p };
+    if (opts.userAgent) t.userAgent = opts.userAgent;
+    return t as CaptchaTask<CloudflareSolution>;
   },
 };
 
@@ -220,6 +271,9 @@ export interface CaptchaClientOptions {
   pollIntervalMs?: number;
   /** Map other services' task type names to Browsa's (default true). */
   normalize?: boolean;
+  /** How long the API is asked to hold each call in solve(), seconds (default 20, at most 25;
+   * 0 polls every pollIntervalMs instead). */
+  waitSeconds?: number;
   fetch?: typeof fetch;
 }
 
@@ -228,8 +282,10 @@ export interface CaptchaAnswer {
   errorCode?: string;
   errorDescription?: string;
   taskId?: string;
-  status?: "processing" | "ready";
+  status?: "processing" | "ready" | "failed";
   solution?: Record<string, unknown>;
+  cost?: CaptchaCost;
+  solveSeconds?: number;
   balance?: number;
   [k: string]: unknown;
 }
@@ -245,6 +301,7 @@ export class CaptchaClient {
   private timeoutMs: number;
   private pollIntervalMs: number;
   private normalize: boolean;
+  private waitSeconds: number;
   private fetchImpl: typeof fetch;
 
   constructor(opts: CaptchaClientOptions = {}) {
@@ -255,19 +312,24 @@ export class CaptchaClient {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT;
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.normalize = opts.normalize ?? true;
+    // never longer than one HTTP request can last
+    this.waitSeconds = Math.max(0, Math.min(opts.waitSeconds ?? DEFAULT_WAIT_SECONDS, 25, this.timeoutMs / 1000 - 5));
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
   /** POST /{method} with clientKey added; resolves the answer or throws CaptchaError. */
-  async call(method: string, payload: Record<string, unknown> = {}): Promise<CaptchaAnswer> {
+  call(method: string, payload: Record<string, unknown> = {}): Promise<CaptchaAnswer> {
+    return this.send(method, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": USER_AGENT },
+      body: JSON.stringify({ clientKey: this.apiKey, ...payload }),
+    });
+  }
+
+  private async send(path: string, init: RequestInit): Promise<CaptchaAnswer> {
     let resp: Response;
     try {
-      resp = await this.fetchImpl(`${this.baseUrl}/${method}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": USER_AGENT },
-        body: JSON.stringify({ clientKey: this.apiKey, ...payload }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
+      resp = await this.fetchImpl(`${this.baseUrl}/${path}`, { ...init, signal: AbortSignal.timeout(this.timeoutMs) });
     } catch (e) {
       const err = e as Error;
       if (err?.name === "TimeoutError" || err?.name === "AbortError") {
@@ -286,15 +348,37 @@ export class CaptchaClient {
     return body as CaptchaAnswer;
   }
 
-  /** {taskId, status: "ready", solution} for recognition, {taskId} for tokens. */
-  createTask(task: CaptchaTask<any> | Record<string, unknown>): Promise<CaptchaAnswer> {
+  /**
+   * {taskId, status: "ready", solution} for recognition, {taskId} for tokens.
+   * `waitSeconds`: hold the call until a token task ends or the wait runs out (then status is
+   * "ready" with the solution, or "processing").
+   */
+  createTask(task: CaptchaTask<any> | Record<string, unknown>, opts: { waitSeconds?: number } = {}): Promise<CaptchaAnswer> {
     const t = this.normalize ? normalizeCaptchaTask(task as Record<string, unknown>) : { ...task };
-    return this.call("createTask", { task: t });
+    const payload: Record<string, unknown> = { task: t };
+    if (opts.waitSeconds) payload.waitSeconds = opts.waitSeconds;
+    return this.call("createTask", payload);
   }
 
-  /** {status: "processing"} or {status: "ready", solution}; a failed task throws. */
-  getTaskResult(taskId: string): Promise<CaptchaAnswer> {
-    return this.call("getTaskResult", { taskId });
+  /** {status: "processing"} or {status: "ready", solution, cost, solveSeconds}; a failed task throws.
+   * `waitSeconds` (up to 25): the call is held until the task ends. */
+  getTaskResult(taskId: string, opts: { waitSeconds?: number } = {}): Promise<CaptchaAnswer> {
+    return this.call("getTaskResult", opts.waitSeconds ? { taskId, waitSeconds: opts.waitSeconds } : { taskId });
+  }
+
+  /** Tell the API whether the site took the solution. One report per task, within 15 minutes of the
+   * solve. Reports are recorded and used to improve solving. Throws CaptchaError (ERROR_ALREADY_REPORTED,
+   * ERROR_REPORT_TOO_LATE, ERROR_REPORT_LIMIT). */
+  async report(taskId: string, correct: boolean): Promise<CaptchaReport> {
+    return (await this.call(correct ? "reportCorrect" : "reportIncorrect", { taskId })) as unknown as CaptchaReport;
+  }
+  reportCorrect(taskId: string): Promise<CaptchaReport> { return this.report(taskId, true); }
+  reportIncorrect(taskId: string): Promise<CaptchaReport> { return this.report(taskId, false); }
+
+  /** Every task type the API accepts (no key is sent): status, parameters, price, measured numbers. */
+  async listTypes(): Promise<CaptchaTypeInfo[]> {
+    const r = await this.send("types", { method: "GET", headers: { Accept: "application/json", "User-Agent": USER_AGENT } });
+    return (r.types as CaptchaTypeInfo[]) ?? [];
   }
 
   /** Balance: credits with a Browsa key. */
@@ -302,27 +386,45 @@ export class CaptchaClient {
     return Number((await this.call("getBalance")).balance ?? 0);
   }
 
-  /** Create the task and wait for its solution. */
+  /**
+   * Create the task and wait for its solution. It does not poll on a timer: each call asks the
+   * API to hold until the task ends (waitSeconds), so the answer arrives when it exists. Against a
+   * server that does not hold calls it polls every pollIntervalMs.
+   */
   async solve<S = Record<string, unknown>>(task: CaptchaTask<S> | Record<string, unknown>,
     opts: { timeoutMs?: number; pollIntervalMs?: number } = {}): Promise<Solved<S>> {
-    const created = await this.createTask(task);
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_SOLVE_TIMEOUT;
+    const deadline = Date.now() + timeoutMs;
+    const firstWait = Math.min(this.waitSeconds, timeoutMs / 1000);
+    const created = await this.createTask(task, { waitSeconds: firstWait || undefined });
     const taskId = String(created.taskId ?? "");
-    if (created.status === "ready" && created.solution) return withId<S>(created.solution, taskId);
+    if (created.status === "ready" && created.solution) return withId<S>(created, taskId);
     if (!taskId) throw new CaptchaError("createTask returned no taskId", { code: "ERROR_NO_TASK_ID", body: created });
     const interval = opts.pollIntervalMs ?? this.pollIntervalMs;
-    const deadline = Date.now() + (opts.timeoutMs ?? DEFAULT_SOLVE_TIMEOUT);
     for (;;) {
-      await sleep(Math.min(interval, Math.max(0, deadline - Date.now())));
-      const r = await this.getTaskResult(taskId);
-      if (r.status === "ready" && r.solution) return withId<S>(r.solution, taskId);
-      if (Date.now() >= deadline) throw new CaptchaTimeoutError(`no solution after ${Math.round((opts.timeoutMs ?? DEFAULT_SOLVE_TIMEOUT) / 1000)}s`, { taskId });
+      const left = deadline - Date.now();
+      if (left <= 0) throw new CaptchaTimeoutError(`no solution after ${Math.round(timeoutMs / 1000)}s`, { taskId });
+      let held = Math.min(this.waitSeconds, left / 1000);
+      if (held < 1) {                           // not asking the API to hold: wait here, as before
+        await sleep(Math.min(interval, left));
+        held = 0;
+      }
+      const asked = Date.now();
+      const r = await this.getTaskResult(taskId, { waitSeconds: held || undefined });
+      if (r.status === "ready" && r.solution) return withId<S>(r, taskId);
+      if (held && Date.now() - asked < Math.min(1000, held * 1000)) {
+        // answered at once though asked to hold (an older server): do not spin
+        await sleep(Math.min(interval, Math.max(0, deadline - Date.now())));
+      }
     }
   }
 }
 
-function withId<S>(solution: Record<string, unknown>, taskId: string): Solved<S> {
-  const s = { ...solution };
+function withId<S>(answer: CaptchaAnswer, taskId: string): Solved<S> {
+  const s = { ...(answer.solution ?? {}) };
   Object.defineProperty(s, "taskId", { value: taskId, enumerable: false });
+  Object.defineProperty(s, "cost", { value: answer.cost, enumerable: false });
+  Object.defineProperty(s, "solveSeconds", { value: answer.solveSeconds, enumerable: false });
   return s as unknown as Solved<S>;
 }
 
@@ -355,6 +457,11 @@ export class TwoCaptchaSolver {
   async balance(): Promise<number> {
     return this.cap.getBalance();
   }
+
+  /** The site took the answer (same call as the library's goodReport). */
+  goodReport(id: string): Promise<CaptchaReport> { return this.cap.reportCorrect(id); }
+  /** The site refused the answer (same call as the library's badReport): recorded. */
+  badReport(id: string): Promise<CaptchaReport> { return this.cap.reportIncorrect(id); }
 
   async recaptcha(params: {
     pageurl: string; googlekey: string; invisible?: 0 | 1 | boolean; version?: string; action?: string;

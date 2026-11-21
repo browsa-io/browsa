@@ -143,7 +143,7 @@ Everything else from 0.5 is in groups you turn on with `BROWSA_MCP_TOOLS` (comma
 | `schedules` | `create_schedule`, `list_schedules` |
 | `webhooks` | `list_webhooks`, `create_webhook`, `delete_webhook` |
 | `cdp` | `start_browser`, `stop_browser` (a CDP address, to drive the browser from your own code) |
-| `captcha` | `solve_captcha_task` (Browsa's captcha API, for pages outside a Browsa browser) |
+| `captcha` | `solve_captcha_task` (Browsa's captcha API, for pages outside a Browsa browser; the answer says what the solve cost), `list_captcha_types` (every type with its parameters, price and measured pass rate), `report_captcha_result` (tell Browsa whether the site took a solution; reports are recorded and used to improve solving) |
 | `admin` | `credits`, `list_browsers`, `list_identities`, `proxy_network`, `list_llm_keys`, `list_models` |
 | `all` | every group |
 

@@ -90,7 +90,8 @@ def test_create_sends_fields_and_parses(http):
         "settings": settings,
     }
     assert isinstance(rb, Robot) and rb.id == "rb1" and rb.recipe_id == "r1"
-    assert rb.settings == {"model": {"llm": "browsa-smart"}, "proxy": {"network": "residential", "country": "us"}, "browser": None}
+    assert rb.settings == {"model": {"llm": "browsa-smart"}, "proxy": {"network": "residential", "country": "us"},
+                           "browser": None, "secrets": []}
     assert rb.health.pass_rate == 0.5 and rb.health.price_credits == 3 and rb.health.last_failure == "blocked"
     assert rb.schedule["interval_seconds"] == 86400
     assert isinstance(rb.last_run, RobotRun) and rb.last_run.id == "rr1"
@@ -102,7 +103,7 @@ def test_create_from_recipe_auto_settings(http):
     handlers["POST /v1/robots"] = (201, {**ROBOT, "settings": {"model": None, "proxy": None, "browser": None}, "health": None})
     rb = client().robots.create(name="x", recipe_id="r9")
     assert calls[0]["body"] == {"name": "x", "recipe_id": "r9"}
-    assert rb.settings == {"model": None, "proxy": None, "browser": None}
+    assert rb.settings == {"model": None, "proxy": None, "browser": None, "secrets": []}
     assert rb.health is None
 
 
@@ -127,9 +128,56 @@ def test_update_sends_only_given_fields_none_clears(http):
     handlers["PATCH /v1/robots/rb1"] = (200, ROBOT)
     c = client()
     c.robots.update("rb1", name="New", schedule=None, settings=None)
+    # settings=None resets everything: no read first.
+    assert [x["key"] for x in calls] == ["PATCH /v1/robots/rb1"]
     assert calls[0]["body"] == {"name": "New", "schedule": None, "settings": None}
-    c.robots.update("rb1", settings={"proxy": {"proxy_id": "p1"}})
-    assert calls[1]["body"] == {"settings": {"proxy": {"proxy_id": "p1"}}}
+    c.robots.update("rb1", name="Only name")
+    assert calls[1]["body"] == {"name": "Only name"}
+
+
+# The API's PATCH replaces settings whole (services/agents robots.go), so a
+# settings update reads the robot and sends its settings with the new parts over them.
+SECRET_ROBOT = {**ROBOT, "settings": {
+    "model": {"llm": "browsa-smart"}, "proxy": {"network": "residential", "country": "us"},
+    "browser": {"os": "mac", "screen": "1440x900"}, "secrets": ["DUMMY_LOGIN", "DUMMY_TOKEN"]}}
+
+
+def test_update_proxy_only_keeps_secrets_and_other_parts(http):
+    handlers, calls = http
+    handlers["GET /v1/robots/rb1"] = (200, SECRET_ROBOT)
+    handlers["PATCH /v1/robots/rb1"] = (200, SECRET_ROBOT)
+    rb = client().robots.update("rb1", settings={"proxy": {"proxy_id": "p1"}})
+    assert [x["key"] for x in calls] == ["GET /v1/robots/rb1", "PATCH /v1/robots/rb1"]
+    assert calls[1]["body"] == {"settings": {
+        "model": {"llm": "browsa-smart"}, "proxy": {"proxy_id": "p1"},
+        "browser": {"os": "mac", "screen": "1440x900"}, "secrets": ["DUMMY_LOGIN", "DUMMY_TOKEN"]}}
+    assert rb.settings["secrets"] == ["DUMMY_LOGIN", "DUMMY_TOKEN"]
+
+
+def test_update_settings_none_part_goes_auto_and_secrets_can_change(http):
+    handlers, calls = http
+    handlers["GET /v1/robots/rb1"] = (200, SECRET_ROBOT)
+    handlers["PATCH /v1/robots/rb1"] = (200, ROBOT)
+    c = client()
+    c.robots.update("rb1", settings={"model": None, "secrets": ["DUMMY_TOKEN"]})
+    assert calls[1]["body"]["settings"] == {
+        "model": None, "proxy": {"network": "residential", "country": "us"},
+        "browser": {"os": "mac", "screen": "1440x900"}, "secrets": ["DUMMY_TOKEN"]}
+
+
+def test_update_settings_on_robot_without_settings(http):
+    handlers, calls = http
+    handlers["GET /v1/robots/rb1"] = (200, {**ROBOT, "settings": None})
+    handlers["PATCH /v1/robots/rb1"] = (200, ROBOT)
+    client().robots.update("rb1", name="n", settings={"secrets": ["DUMMY_LOGIN"]})
+    assert calls[1]["body"] == {"name": "n", "settings": {"secrets": ["DUMMY_LOGIN"]}}
+
+
+def test_robot_parses_secrets_and_warnings():
+    rb = Robot.from_response({**SECRET_ROBOT, "settings_warnings": [
+        {"code": "SECRET_NOT_FOUND", "secret": "LATER_KEY", "message": "LATER_KEY is not in this workspace's Secrets."}]})
+    assert rb.settings["secrets"] == ["DUMMY_LOGIN", "DUMMY_TOKEN"]
+    assert rb.settings_warnings[0]["code"] == "SECRET_NOT_FOUND"
 
 
 def test_run_runs_alerts_read(http):

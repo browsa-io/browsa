@@ -18,11 +18,18 @@ function startMockCaptchaApi() {
       const body = raw ? JSON.parse(raw) : {};
       calls.push({ path: req.url, body });
       const send = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+      if (req.method === "GET" && req.url === "/captcha-api/types") return send({ errorId: 0, types: TYPES });
       if (body.clientKey !== KEY) return send({ errorId: 1, errorCode: "ERROR_KEY_DENIED_ACCESS", errorDescription: "clientKey is missing or invalid" });
       if (req.url === "/captcha-api/createTask") {
         const t = body.task;
-        if (t.type === "ImageToTextTask") return send(ok({ taskId: "t-img", status: "ready", solution: { text: "x7Kp2" } }));
-        if (t.type === "FunCaptchaTaskProxyLess") return send({ errorId: 1, errorCode: "ERROR_TASK_NOT_SUPPORTED", errorDescription: "not supported" });
+        if (t.type === "ImageToTextTask") {
+          return send(ok({ taskId: "t-img", status: "ready", solution: { text: "x7Kp2" }, solveSeconds: 3.1,
+            cost: { charged: true, amount: 0.004, unit: "credits", credits: 0.004, note: "Charged once, for this solve." } }));
+        }
+        if (t.type === "FunCaptchaTaskProxyLess") {
+          return send({ errorId: 1, errorCode: "ERROR_TASK_NOT_SUPPORTED", errorDescription: "not supported", charged: false,
+            fix: "Type names are case-sensitive; GET /types lists every type with its parameters." });
+        }
         const id = t.websiteKey === "bad" ? "t-bad" : t.websiteKey === "slow" ? "t-slow" : `t-${t.type}`;
         polls.set(id, 0);
         return send(ok({ taskId: id }));
@@ -35,6 +42,15 @@ function startMockCaptchaApi() {
         return send(ok({ taskId: id, status: "ready", solution: id.includes("Turnstile")
           ? { token: "0.cf-token", type: "turnstile", userAgent: "UA" } : { gRecaptchaResponse: "03AF-token", userAgent: "UA" } }));
       }
+      if (req.url === "/captcha-api/reportIncorrect" || req.url === "/captcha-api/reportCorrect") {
+        if (body.taskId === "t-twice") {
+          return send({ errorId: 1, errorCode: "ERROR_ALREADY_REPORTED", errorDescription: "this solve was already reported.",
+            fix: "Nothing to do: the first report stands, and a refund is made only once.", charged: false, refunded: true, taskId: body.taskId });
+        }
+        const wrong = req.url.endsWith("Incorrect");
+        return send(ok({ taskId: body.taskId, status: "success", outcome: wrong ? "incorrect" : "correct", refunded: wrong,
+          refund: { amount: wrong ? 0.004 : 0, unit: "credits" }, message: wrong ? "Recorded as incorrect. Refunded 0.004 credits." : "Recorded as correct." }));
+      }
       send({ errorId: 1, errorCode: "ERROR_BAD_REQUEST", errorDescription: "unknown method" });
     });
   });
@@ -42,6 +58,16 @@ function startMockCaptchaApi() {
     url: `http://127.0.0.1:${srv.address().port}`, calls, close: () => srv.close(),
   })));
 }
+
+const TYPES = [
+  { type: "ImageToTextTask", title: "Image text", summary: "Read the characters in a picture captcha.", kind: "recognition", status: "live",
+    required: [], requiredOneOf: [[{ name: "body", type: "string", description: "One picture." }, { name: "images", type: "array", description: "1 to 9 pictures." }]],
+    optional: [{ name: "module", type: "string", description: "Ignored." }], proxy: "none", price: { usdPer1000: 0.4, creditsPerSolve: 0.004 },
+    measured: [{ row: "image_text", name: "Image text type the characters", attempts: 30, passes: 28, passRate: 0.933, medianSeconds: 6.2, measuredOn: "2026-11-16", exit: "Data center" }] },
+  { type: "VisionEngine", title: "Slider gap", summary: "The gap of a slider puzzle.", kind: "recognition", status: "off", offReason: "switched off until a measured run passes",
+    required: [{ name: "module", type: "string", description: "slider_1" }, { name: "imageBackground", type: "string", description: "The background." }],
+    optional: [], proxy: "none", price: { usdPer1000: 0.8, creditsPerSolve: 0.008 }, measured: [] },
+];
 
 function startMcp(env) {
   const e = { ...process.env, BROWSA_API_KEY: KEY, BROWSA_CAPTCHA_POLL_MS: "20", BROWSA_MCP_TOOLS: "all", ...env };
@@ -100,7 +126,7 @@ describe("MCP solve_captcha_task", () => {
     assert.ok(!/\d+ ?%/.test(t.description), "a rate is written into the description");
     assert.ok(!/hCaptcha|FunCaptcha|ALTCHA/.test(byName.run_task.description), "run_task lists unmeasured types");
     const init = await mcp.rpc("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "0" } });
-    assert.equal(init.result.serverInfo.version, "0.6.0");
+    assert.equal(init.result.serverInfo.version, "0.7.0");
   });
 
   test("recognition: answered in createTask", async () => {
@@ -137,6 +163,86 @@ describe("MCP solve_captcha_task", () => {
     assert.equal(r.isError, true);
     assert.equal(r.body.code, "TIMEOUT");
     assert.equal(r.body.task_id, "t-slow");
+  });
+});
+
+describe("MCP captcha: waits, cost, the type list and reports", () => {
+  let api, mcp;
+  before(async () => {
+    api = await startMockCaptchaApi();
+    mcp = startMcp({ BROWSA_BASE_URL: api.url });
+    await mcp.init();
+  });
+  after(() => { mcp?.kill(); api?.close(); });
+
+  test("both tools are listed in the captcha group, and name no other company", async () => {
+    const r = await mcp.rpc("tools/list", {});
+    const byName = Object.fromEntries(r.result.tools.map((t) => [t.name, t]));
+    assert.ok(byName.list_captcha_types && byName.report_captcha_result);
+    assert.deepEqual(byName.report_captcha_result.inputSchema.required, ["task_id", "correct"]);
+    const text = JSON.stringify([byName.list_captcha_types, byName.report_captcha_result]);
+    assert.ok(!/capsolver|anti-captcha|capmonster|2captcha|chromium|\d+ ?%/i.test(text));
+  });
+
+  test("solve asks the API to hold the call and passes cost and time on", async () => {
+    const r = await mcp.call("solve_captcha_task", { task: { type: "ImageToTextTask", body: "iVBORw==" } });
+    assert.equal(r.isError, false);
+    assert.equal(r.body.seconds, 3.1);
+    assert.deepEqual([r.body.cost.charged, r.body.cost.credits], [true, 0.004]);
+    assert.match(r.body.next, /report_captcha_result/);
+    const created = api.calls.findLast((c) => c.path === "/captcha-api/createTask");
+    assert.equal(created.body.waitSeconds, 20);
+    const t = await mcp.call("solve_captcha_task", { task: { type: "ReCaptchaV3TaskProxyLess", websiteURL: "https://a.example", websiteKey: "k" } });
+    assert.equal(t.isError, false);
+    const poll = api.calls.findLast((c) => c.path === "/captcha-api/getTaskResult");
+    assert.ok(poll.body.waitSeconds >= 1 && poll.body.waitSeconds <= 20);
+  });
+
+  test("an unknown type points at list_captcha_types and passes the API's fix on", async () => {
+    const r = await mcp.call("solve_captcha_task", { task: { type: "FunCaptchaTaskProxyLess", websiteURL: "https://a.example", websiteKey: "k" } });
+    assert.equal(r.isError, true);
+    assert.match(r.body.next, /list_captcha_types/);
+    assert.match(r.body.fix, /case-sensitive/);
+    assert.equal(r.body.charged, false);
+  });
+
+  test("list_captcha_types: compact list, live_only, and one type in full; no key is sent", async () => {
+    const all = await mcp.call("list_captcha_types");
+    assert.equal(all.isError, false);
+    assert.deepEqual(all.body.types.map((t) => [t.type, t.status]), [["ImageToTextTask", "live"], ["VisionEngine", "off"]]);
+    const img = all.body.types[0];
+    assert.deepEqual(img.required, ["body or images"]);
+    assert.deepEqual(img.optional, ["module"]);
+    assert.equal(img.credits_per_solve, 0.004);
+    assert.deepEqual(img.measured, [{ what: "Image text type the characters", passes: "28 of 30", median_seconds: 6.2, measured_on: "2026-11-16", exit: "Data center" }]);
+    assert.match(all.body.types[1].off_reason, /measured run/);
+    const call = api.calls.findLast((c) => c.path === "/captcha-api/types");
+    assert.deepEqual(call.body, {});
+    const live = await mcp.call("list_captcha_types", { live_only: true });
+    assert.deepEqual(live.body.types.map((t) => t.type), ["ImageToTextTask"]);
+    const one = await mcp.call("list_captcha_types", { type: "visionengine" });
+    assert.equal(one.body.type, "VisionEngine");
+    assert.equal(one.body.required[0].description, "slider_1");
+    const none = await mcp.call("list_captcha_types", { type: "Nope" });
+    assert.equal(none.isError, true);
+    assert.deepEqual(none.body.types, ["ImageToTextTask", "VisionEngine"]);
+  });
+
+  test("report_captcha_result: refund on incorrect, record on correct, one report per task", async () => {
+    const bad = await mcp.call("report_captcha_result", { task_id: "t-img", correct: false });
+    assert.equal(bad.isError, false);
+    assert.deepEqual([bad.body.outcome, bad.body.refunded, bad.body.refund.amount], ["incorrect", true, 0.004]);
+    assert.deepEqual(api.calls.at(-1).body, { clientKey: KEY, taskId: "t-img" });
+    assert.equal(api.calls.at(-1).path, "/captcha-api/reportIncorrect");
+    const good = await mcp.call("report_captcha_result", { task_id: "t-2", correct: true });
+    assert.deepEqual([good.body.outcome, good.body.refunded], ["correct", false]);
+    assert.equal(api.calls.at(-1).path, "/captcha-api/reportCorrect");
+    const twice = await mcp.call("report_captcha_result", { task_id: "t-twice", correct: false });
+    assert.equal(twice.isError, true);
+    assert.deepEqual([twice.body.code, twice.body.refunded], ["ERROR_ALREADY_REPORTED", true]);
+    assert.match(twice.body.fix, /first report stands/);
+    assert.equal((await mcp.call("report_captcha_result", { task_id: "t-3" })).isError, true);
+    assert.equal((await mcp.call("report_captcha_result", { correct: true })).isError, true);
   });
 });
 

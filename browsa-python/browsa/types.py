@@ -66,6 +66,57 @@ class Usage:
 
 
 @dataclass
+class SavedSecret:
+    """A workspace secret a run saved (``job.saved_secrets``): when the agent
+    created a login (a signup), the runner stores it as a secret unless the
+    task was sent with ``save_secrets=False``. Never carries a value.
+
+    type is ``"login"`` or ``"value"``; username_masked is set on logins
+    only ("al…@example.com"); existing is True when the run updated a secret
+    that was already there instead of creating one."""
+    name: str
+    id: Optional[str] = None
+    type: Optional[str] = None
+    origins: list = field(default_factory=list)
+    username_masked: Optional[str] = None
+    existing: bool = False
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "SavedSecret":
+        body = body if isinstance(body, dict) else {}
+        origins = body.get("origins")
+        return cls(
+            name=body.get("name") or "",
+            id=_opt_str(body.get("id")),
+            type=_opt_str(body.get("type")),
+            origins=[o for o in origins if isinstance(o, str)] if isinstance(origins, list) else [],
+            username_masked=_opt_str(body.get("username_masked")),
+            existing=body.get("existing") is True,
+            raw=body,
+        )
+
+
+@dataclass
+class SecretsNotSaved:
+    """Why a run did not save the login it created (``job.secrets_not_saved``).
+
+    code is one of KEY_SCOPE_REQUIRED (the API key lacks ``secrets:write``),
+    SECRET_ROLE_REQUIRED (the member may not change secrets),
+    OUTPUT_SECRETS_OFF, SECRETS_UNAVAILABLE, SECRET_LIMIT, NO_USERNAME or
+    SAVE_FAILED."""
+    code: str
+    message: str = ""
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: Any) -> Optional["SecretsNotSaved"]:
+        if not isinstance(body, dict) or not body.get("code"):
+            return None
+        return cls(code=str(body.get("code")), message=str(body.get("message") or ""), raw=body)
+
+
+@dataclass
 class Job:
     """Single job envelope returned by GET /v1/jobs/:id and POST /v1/tasks."""
     id: str
@@ -141,6 +192,14 @@ class Job:
     # draft recorded from the run, None until it is stored.
     record_recipe: bool = False
     recipe_draft_id: Optional[str] = None
+    # Workspace secrets (``secret_ids``) the job was given, value-free:
+    # [{"id", "name", "type", "origins", ...}]. Empty when none.
+    secrets_used: list = field(default_factory=list)
+    # Logins the run created and saved as workspace secrets (from the job's
+    # result; see save_secrets on create_task). Empty when none.
+    saved_secrets: "list[SavedSecret]" = field(default_factory=list)
+    # Why a login the run created was not saved, or None.
+    secrets_not_saved: Optional[SecretsNotSaved] = None
     raw: dict = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -194,6 +253,11 @@ class Job:
             proxy_credits=int(body.get("proxy_credits") or 0),
             record_recipe=body.get("record_recipe") is True,
             recipe_draft_id=body.get("recipe_draft_id") or None,
+            secrets_used=[s for s in (body.get("secrets_used") or []) if isinstance(s, dict)]
+            if isinstance(body.get("secrets_used"), list) else [],
+            saved_secrets=[SavedSecret.from_response(s) for s in (result.get("saved_secrets") or [])
+                           if isinstance(s, dict)] if isinstance(result.get("saved_secrets"), list) else [],
+            secrets_not_saved=SecretsNotSaved.from_response(result.get("secrets_not_saved")),
             raw=body,
         )
 
@@ -902,7 +966,12 @@ class Robot:
     schedule or from the API. One run covers every input row; a row costs
     the recipe's price_credits (``health.price_credits``), failed rows are free.
 
-    settings is ``{"model", "proxy", "browser"}``, each None when Auto.
+    settings is ``{"model", "proxy", "browser", "secrets"}``: model, proxy
+    and browser are None when Auto; secrets is a list of secret names or
+    ids (``[]`` when none). settings_warnings lists what may stop a row
+    from typing a secret, as ``{"code", "secret", "message"}`` (codes
+    SECRET_NOT_FOUND, SECRET_ORIGIN_MISMATCH, SECRET_NO_ORIGINS,
+    SECRETS_UNAVAILABLE).
     schedule is ``{"interval_seconds", "at", "weekday", "tz", "next_run_at",
     "enabled", "id"}`` or None.
     """
@@ -917,7 +986,8 @@ class Robot:
     destinations: list = field(default_factory=list)
     monitors: list = field(default_factory=list)
     schedule: Optional[dict] = None
-    settings: dict = field(default_factory=lambda: {"model": None, "proxy": None, "browser": None})
+    settings: dict = field(default_factory=lambda: {"model": None, "proxy": None, "browser": None, "secrets": []})
+    settings_warnings: list = field(default_factory=list)
     source_job_id: Optional[str] = None
     health: Optional[RobotHealth] = None
     alerts_unread: int = 0
@@ -944,11 +1014,78 @@ class Robot:
             destinations=list(body.get("destinations") or []),
             monitors=list(body.get("monitors") or []),
             schedule=body.get("schedule") if isinstance(body.get("schedule"), dict) else None,
-            settings={k: st.get(k) for k in ("model", "proxy", "browser")},
+            settings={"model": None, "proxy": None, "browser": None, **st,
+                      "secrets": list(st.get("secrets") or [])},
+            settings_warnings=list(body.get("settings_warnings") or []),
             source_job_id=_opt_str(body.get("source_job_id")),
             health=RobotHealth.from_response(h) if isinstance(h, dict) else None,
             alerts_unread=int(body.get("alerts_unread") or 0),
             last_run=RobotRun.from_response(lr) if isinstance(lr, dict) else None,
+            created_at=body.get("created_at"),
+            updated_at=body.get("updated_at"),
+            raw=body,
+        )
+
+
+@dataclass
+class Secret:
+    """A workspace secret (``client.secrets``). Values are write-only: no
+    route returns a value, a seed or anything derived from one except
+    ``username_masked``.
+
+    type is ``"login"``, ``"totp"`` or ``"value"``. origins are where it may
+    be typed (``["https://*.github.com"]``, or ``["*"]`` with any_origin).
+    placeholders are the references act(secret=...) takes
+    ("GITHUB_LOGIN:password", "TOTP:GITHUB_LOGIN"). totp is ``{"digits",
+    "algorithm", "period"}`` when the secret has a one-time-code seed.
+    used_by (list and get only) lists the robots and schedules that name it:
+    ``[{"kind": "robot" | "schedule", "id", "name"}]``. needs_origins: saved
+    before origins were required; typed nowhere until they are set.
+    """
+    id: str
+    name: str
+    type: str
+    description: str = ""
+    origins: list = field(default_factory=list)
+    username_masked: Optional[str] = None
+    has_value: bool = False
+    has_totp: bool = False
+    totp: Optional[dict] = None
+    placeholders: list = field(default_factory=list)
+    any_origin: bool = False
+    needs_origins: bool = False
+    warning: Optional[str] = None
+    keypair_id: Optional[str] = None
+    created_by: Optional[dict] = None
+    used_by: list = field(default_factory=list)
+    last_used_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_response(cls, body: dict) -> "Secret":
+        body = body if isinstance(body, dict) else {}
+        totp = body.get("totp")
+        created_by = body.get("created_by")
+        return cls(
+            id=body.get("id") or "",
+            name=body.get("name") or "",
+            type=body.get("type") or "",
+            description=body.get("description") or "",
+            origins=list(body.get("origins") or []),
+            username_masked=_opt_str(body.get("username_masked")),
+            has_value=body.get("has_value") is True,
+            has_totp=body.get("has_totp") is True,
+            totp=totp if isinstance(totp, dict) else None,
+            placeholders=list(body.get("placeholders") or []),
+            any_origin=body.get("any_origin") is True,
+            needs_origins=body.get("needs_origins") is True,
+            warning=_opt_str(body.get("warning")),
+            keypair_id=_opt_str(body.get("keypair_id")),
+            created_by=created_by if isinstance(created_by, dict) else None,
+            used_by=list(body.get("used_by") or []),
+            last_used_at=body.get("last_used_at"),
             created_at=body.get("created_at"),
             updated_at=body.get("updated_at"),
             raw=body,

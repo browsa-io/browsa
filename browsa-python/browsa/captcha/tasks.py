@@ -25,14 +25,19 @@ IMAGE_TO_TEXT = "ImageToTextTask"
 RECAPTCHA_V2_CLASSIFICATION = "ReCaptchaV2Classification"
 AWS_WAF_CLASSIFICATION = "AwsWafClassification"
 VISION_ENGINE = "VisionEngine"
+GEETEST_SLIDE = "GeeTestSlide"
+CLOUDFLARE_CHALLENGE = "AntiCloudflareTask"
 
-RECOGNITION_TYPES = (IMAGE_TO_TEXT, RECAPTCHA_V2_CLASSIFICATION, AWS_WAF_CLASSIFICATION, VISION_ENGINE)
+# The live list, with parameters, prices and measured numbers: CaptchaClient.list_types()
+# (GET https://captcha.browsa.io/types).
+RECOGNITION_TYPES = (IMAGE_TO_TEXT, RECAPTCHA_V2_CLASSIFICATION, AWS_WAF_CLASSIFICATION, VISION_ENGINE, GEETEST_SLIDE)
 TOKEN_TYPES = (
     "ReCaptchaV2TaskProxyLess", "ReCaptchaV2Task",
     "ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTask",
     "ReCaptchaV3TaskProxyLess", "ReCaptchaV3Task",
     "ReCaptchaV3EnterpriseTaskProxyLess", "ReCaptchaV3EnterpriseTask",
     "AntiTurnstileTaskProxyLess", "AntiTurnstileTask",
+    CLOUDFLARE_CHALLENGE,
 )
 TASK_TYPES = RECOGNITION_TYPES + TOKEN_TYPES
 
@@ -49,6 +54,8 @@ _alias(["ImageToTextTask"], IMAGE_TO_TEXT)
 _alias(["ReCaptchaV2Classification"], RECAPTCHA_V2_CLASSIFICATION)
 _alias(["AwsWafClassification"], AWS_WAF_CLASSIFICATION)
 _alias(["VisionEngine"], VISION_ENGINE)
+_alias(["GeeTestSlide"], GEETEST_SLIDE)
+_alias(["AntiCloudflareTask"], CLOUDFLARE_CHALLENGE)
 # Already proxyless names stay proxyless
 _alias(["ReCaptchaV2TaskProxyLess", "NoCaptchaTaskProxyless"], "ReCaptchaV2TaskProxyLess")
 _alias(["ReCaptchaV2EnterpriseTaskProxyLess"], "ReCaptchaV2EnterpriseTaskProxyLess")
@@ -198,7 +205,7 @@ def recaptcha_v2_classification(image: Image, question: str, *, size: Optional[i
 
 def aws_waf_classification(images: Sequence[Image], question: str) -> Task:
     """Which tiles of an AWS WAF grid show the object (``aws:grid:<object>``).
-    Off on the API until a measured run passes. Solution: ``{"objects": [0-based]}``."""
+    Solution: ``{"objects": [0-based]}``."""
     if not question.startswith("aws:grid:"):
         question = "aws:grid:" + question
     return {"type": AWS_WAF_CLASSIFICATION, "images": [_b64(i) for i in images], "question": question}
@@ -210,6 +217,42 @@ def slider(image_background: Image, image: Optional[Image] = None) -> Task:
     task: Task = {"type": VISION_ENGINE, "module": "slider_1", "imageBackground": _b64(image_background)}
     if image is not None:
         task["image"] = _b64(image)
+    return task
+
+
+def geetest_slide_v3(image_background: Image, image_full: Image, *, css_width: Optional[float] = None,
+                     shuffled: bool = True) -> Task:
+    """How far to drag a GeeTest v3 slide puzzle, from the two pictures it serves (the one with
+    the gap and the full one, as downloaded). Solution: ``{"distance": css px, "x": picture px}``."""
+    task: Task = {"type": GEETEST_SLIDE, "version": 3, "imageBackground": _b64(image_background),
+                  "imageFull": _b64(image_full)}
+    if css_width is not None:
+        task["cssWidth"] = css_width
+    if not shuffled:
+        task["shuffled"] = False
+    return task
+
+
+def geetest_slide_v4(image_background: Image, image_slice: Image, *, top: float, bg_css_width: float,
+                     slice_css_width: Optional[float] = None) -> Task:
+    """How far to drag a GeeTest v4 slide puzzle, from its background, the piece's PNG, the piece's
+    top offset and the background's width on the page (CSS px). Solution: ``{"distance", "x"}``."""
+    task: Task = {"type": GEETEST_SLIDE, "version": 4, "imageBackground": _b64(image_background),
+                  "imageSlice": _b64(image_slice), "top": top, "bgCssWidth": bg_css_width}
+    if slice_css_width is not None:
+        task["sliceCssWidth"] = slice_css_width
+    return task
+
+
+def cloudflare_challenge(website_url: str, proxy: ProxyArg, *, user_agent: Optional[str] = None) -> Task:
+    """Pass a page's Cloudflare full-page check through your proxy (required: the cookie only works
+    from the address that passed). Solution: ``{"cookies": {"cf_clearance": ...}, "token", "userAgent"}``."""
+    p = proxy_string(proxy)
+    if not website_url or not p:
+        raise ValueError("website_url and proxy are required")
+    task: Task = {"type": CLOUDFLARE_CHALLENGE, "websiteURL": website_url, "proxy": p}
+    if user_agent:
+        task["userAgent"] = user_agent
     return task
 
 
@@ -243,6 +286,6 @@ class GridSolution(TypedDict, total=False):
 __all__ = [
     "Task", "TASK_TYPES", "RECOGNITION_TYPES", "TOKEN_TYPES", "normalize_task", "proxy_string",
     "image_to_text", "recaptcha_v2", "recaptcha_v3", "turnstile", "recaptcha_v2_classification",
-    "aws_waf_classification", "slider",
+    "aws_waf_classification", "slider", "geetest_slide_v3", "geetest_slide_v4", "cloudflare_challenge",
     "TokenSolution", "TurnstileSolution", "TextSolution", "GridSolution",
 ]

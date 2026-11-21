@@ -1,7 +1,7 @@
 // Settings from the environment and the command line. Nothing here writes
 // a file: the server keeps its state in memory only.
 
-export const VERSION = "0.6.0";
+export const VERSION = "0.7.0";
 export const API_KEY = process.env.BROWSA_API_KEY;
 export const BASE_URL = (process.env.BROWSA_BASE_URL || "https://browsa.io").replace(/\/+$/, "");
 export const BASE_URL_SET = !!process.env.BROWSA_BASE_URL;
@@ -24,7 +24,7 @@ export const GROUPS: Record<string, string[]> = {
   schedules: ["create_schedule", "list_schedules"],
   webhooks: ["list_webhooks", "create_webhook", "delete_webhook"],
   cdp: ["start_browser", "stop_browser"],
-  captcha: ["solve_captcha_task"],
+  captcha: ["solve_captcha_task", "list_captcha_types", "report_captcha_result"],
   admin: ["credits", "list_browsers", "list_identities", "proxy_network", "list_llm_keys", "list_models"],
 };
 

@@ -47,7 +47,8 @@ export const legacyTools = [
       "place an order, search, summarize a page, etc. The browser is a real " +
       "macOS-Chrome-fingerprinted Phantom browser with built-in captcha solving " +
       "(the measured types are listed at https://browsa.io/captcha) and behavioral " +
-      "humanization. Default timeout: 10 minutes.",
+      "humanization. Default timeout: 10 minutes. When the run creates a login (a signup), " +
+      "the result may list it in `saved_secrets` (saved as a workspace secret, never the value).",
     inputSchema: {
       type: "object",
       required: ["task"],
@@ -99,6 +100,18 @@ export const legacyTools = [
           description:
             "Id of a persistent identity (agt_..., from list_identities). If set, reuses that browser " +
             "identity (cookies, history, fingerprint stay sticky). Omit for a fresh burner.",
+        },
+        secret_ids: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: 20,
+          description:
+            "Names or ids of workspace secrets the task may type; refer to them in the task as secrets.NAME " +
+            "(or secrets.NAME.username, .password, .totp).",
+        },
+        save_secrets: {
+          type: "boolean",
+          description: "Set false to stop the run from saving a login it creates as a workspace secret (on by default).",
         },
         timeout_minutes: {
           type: "integer",
@@ -403,6 +416,37 @@ export const legacyTools = [
       },
     },
   },
+  {
+    name: "list_captcha_types",
+    description:
+      "List the captcha task types Browsa's captcha API accepts: whether each is live or off, its required and " +
+      "optional parameters, its price per solve and, where measured, its pass rate with the date of the run. " +
+      "Call it before solve_captcha_task when unsure of a type name or of a parameter: names are case-sensitive. " +
+      "Uses no credits.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        type: { type: "string", description: "Only this type, with the description of every parameter." },
+        live_only: { type: "boolean", description: "Leave out the types that are switched off." },
+      },
+    },
+  },
+  {
+    name: "report_captcha_result",
+    description:
+      "Tell Browsa whether the site accepted a solution from solve_captcha_task: correct=true records that it worked, " +
+      "correct=false that the site refused it. Reports are recorded and used to improve solving. A task can be " +
+      "reported once, within 15 minutes of the solve. " +
+      "Report only what the site itself answered.",
+    inputSchema: {
+      type: "object",
+      required: ["task_id", "correct"],
+      properties: {
+        task_id: { type: "string", description: "task_id from solve_captcha_task." },
+        correct: { type: "boolean", description: "true when the site accepted the solution, false when it refused it." },
+      },
+    },
+  },
 ] as const;
 
 
@@ -565,6 +609,27 @@ function llmResultFields(job: { raw?: Record<string, any> }) {
   return { llm_tier: r.llm_tier, reasoning: r.reasoning, usage: r.usage, llm_cost_usd: r.llm_cost_usd };
 }
 
+// Logins the run saved as workspace secrets (names, sites, masked username;
+// never a value) and why one was not saved. Left out when absent.
+function savedSecretFields(job: { raw?: Record<string, any> }) {
+  const r = job.raw?.result;
+  if (!r || typeof r !== "object") return {};
+  const saved = Array.isArray(r.saved_secrets)
+    ? r.saved_secrets.filter((s: any) => s && typeof s === "object").map((s: any) => ({
+        name: s.name, id: s.id, type: s.type, origins: s.origins,
+        ...(s.username_masked ? { username_masked: s.username_masked } : {}),
+        existing: s.existing === true,
+      }))
+    : [];
+  const notSaved = r.secrets_not_saved && typeof r.secrets_not_saved === "object" && r.secrets_not_saved.code
+    ? { code: r.secrets_not_saved.code, message: r.secrets_not_saved.message }
+    : undefined;
+  return {
+    ...(saved.length ? { saved_secrets: saved } : {}),
+    ...(notSaved ? { secrets_not_saved: notSaved } : {}),
+  };
+}
+
 // Read-only, masked fields only.
 async function listLlmKeys() {
   const body = await apiGet("/v1/llm-keys");
@@ -654,13 +719,16 @@ const CAPTCHA_ALIASES: Record<string, [string, string]> = {
   recaptchav2classification: ["ReCaptchaV2Classification", "ReCaptchaV2Classification"],
 };
 
-async function captchaCall(method: string, payload: Record<string, unknown>): Promise<any> {
-  const resp = await fetch(`${CAPTCHA_URL}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "browsa-mcp" },
-    body: JSON.stringify({ clientKey: API_KEY, ...payload }),
-    signal: AbortSignal.timeout(30_000),
-  });
+async function captchaCall(method: string, payload: Record<string, unknown> | null): Promise<any> {
+  // payload null: a GET with no key (the type catalogue is public)
+  const resp = await fetch(`${CAPTCHA_URL}/${method}`, payload === null
+    ? { method: "GET", headers: { Accept: "application/json", "User-Agent": "browsa-mcp" }, signal: AbortSignal.timeout(30_000) }
+    : {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "browsa-mcp" },
+      body: JSON.stringify({ clientKey: API_KEY, ...payload }),
+      signal: AbortSignal.timeout(30_000),
+    });
   const body: any = await resp.json().catch(() => null);
   if (!body || typeof body !== "object" || !("errorId" in body)) {
     throw new BrowsaError(`captcha API: unexpected answer (HTTP ${resp.status})`, { code: `HTTP_${resp.status}`, status: resp.status });
@@ -675,28 +743,73 @@ async function solveCaptchaTask(args: Record<string, any>) {
   if (pair) task.type = task.proxy || task.proxyAddress ? pair[1] : pair[0];
   const timeoutMs = Math.min(Math.max(Number(args.timeout_seconds) || 180, 5), 600) * 1000;
   const failed = (b: any) => fail(b.errorDescription || b.errorCode, {
-    code: b.errorCode, task_id: b.taskId, charged: false,
-    ...(b.errorCode === "ERROR_TASK_NOT_SUPPORTED" ? { measured_types: "https://browsa.io/captcha" } : {}),
+    code: b.errorCode, task_id: b.taskId, charged: b.charged === true,
+    ...(b.fix ? { fix: b.fix } : {}),
+    ...(b.errorCode === "ERROR_TASK_NOT_SUPPORTED"
+      ? { measured_types: "https://browsa.io/captcha", next: "call list_captcha_types for the type names and their parameters" } : {}),
   });
-  const created = await captchaCall("createTask", { task });
-  if (created.errorId) return failed(created);
   const started = Date.now();
-  if (created.status === "ready" && created.solution) {
-    return ok({ task_id: created.taskId, type: task.type, solution: created.solution, seconds: 0 });
-  }
   const deadline = started + timeoutMs;
+  // The API holds each call until the task ends (waitSeconds), so there is no poll timer to wait out.
+  const hold = () => Math.max(0, Math.min(CAPTCHA_WAIT_S, Math.floor((deadline - Date.now()) / 1000)));
+  const solved = (b: any) => ok({
+    task_id: created.taskId, type: task.type, solution: b.solution,
+    seconds: typeof b.solveSeconds === "number" ? b.solveSeconds : Math.round((Date.now() - started) / 100) / 10,
+    ...(b.cost ? { cost: b.cost } : {}),
+    next: "when the site has answered, call report_captcha_result with correct=true or correct=false",
+  });
+  const created = await captchaCall("createTask", { task, ...(hold() ? { waitSeconds: hold() } : {}) });
+  if (created.errorId) return failed(created);
+  if (created.status === "ready" && created.solution) return solved(created);
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, Math.min(CAPTCHA_POLL_MS, Math.max(0, deadline - Date.now()))));
-    const r = await captchaCall("getTaskResult", { taskId: created.taskId });
+    const wait = hold();
+    if (!wait) await new Promise((r) => setTimeout(r, Math.min(CAPTCHA_POLL_MS, Math.max(0, deadline - Date.now()))));
+    const asked = Date.now();
+    const r = await captchaCall("getTaskResult", { taskId: created.taskId, ...(wait ? { waitSeconds: wait } : {}) });
     if (r.errorId) return failed(r);
-    if (r.status === "ready") {
-      return ok({ task_id: created.taskId, type: task.type, solution: r.solution, seconds: Math.round((Date.now() - started) / 100) / 10 });
+    if (r.status === "ready") return solved(r);
+    if (wait && Date.now() - asked < 1000) {
+      // answered at once though asked to hold (an older server): poll, do not spin
+      await new Promise((res) => setTimeout(res, Math.min(CAPTCHA_POLL_MS, Math.max(0, deadline - Date.now()))));
     }
   }
   return fail(`no solution after ${Math.round(timeoutMs / 1000)}s; the task may still finish (charged only if solved)`,
     { code: "TIMEOUT", task_id: created.taskId });
 }
 const CAPTCHA_POLL_MS = Number(process.env.BROWSA_CAPTCHA_POLL_MS) || 3000;
+const CAPTCHA_WAIT_S = 20;
+
+async function listCaptchaTypes(args: Record<string, any>) {
+  const r = await captchaCall("types", null);
+  if (r.errorId || !Array.isArray(r.types)) return fail(r.errorDescription || "the type catalogue is not available", { code: r.errorCode });
+  const names = (ps: any[]) => (ps ?? []).map((p) => p.name);
+  const measured = (t: any) => (t.measured ?? []).map((m: any) =>
+    ({ what: m.name, passes: `${m.passes} of ${m.attempts}`, median_seconds: m.medianSeconds, measured_on: m.measuredOn, exit: m.exit }));
+  if (typeof args.type === "string" && args.type) {
+    const want = args.type.toLowerCase();
+    const t = r.types.find((x: any) => String(x.type).toLowerCase() === want);
+    if (!t) return fail(`no type named ${args.type}`, { types: r.types.map((x: any) => x.type) });
+    return ok({ ...t, measured: measured(t) });
+  }
+  const types = r.types.filter((t: any) => !args.live_only || t.status === "live").map((t: any) => ({
+    type: t.type, what: t.summary, status: t.status, ...(t.offReason ? { off_reason: t.offReason } : {}),
+    required: [...names(t.required), ...(t.requiredOneOf ?? []).map((g: any[]) => names(g).join(" or "))],
+    optional: names(t.optional), proxy: t.proxy,
+    credits_per_solve: t.price?.creditsPerSolve, measured: measured(t),
+  }));
+  return ok({ types, note: "Names are case-sensitive. A failed solve is not charged. Pass `type` for one type's parameter descriptions." });
+}
+
+async function reportCaptchaResult(args: Record<string, any>) {
+  if (typeof args.task_id !== "string" || !args.task_id) return fail("task_id is required");
+  if (typeof args.correct !== "boolean") return fail("correct must be true or false");
+  const r = await captchaCall(args.correct ? "reportCorrect" : "reportIncorrect", { taskId: args.task_id });
+  if (r.errorId) {
+    return fail(r.errorDescription || r.errorCode, { code: r.errorCode, task_id: args.task_id, ...(r.fix ? { fix: r.fix } : {}),
+      ...(typeof r.refunded === "boolean" ? { refunded: r.refunded } : {}) });
+  }
+  return ok({ task_id: args.task_id, outcome: r.outcome, refunded: r.refunded === true, refund: r.refund, message: r.message });
+}
 
 export async function callLegacy(name: string, args: Record<string, any>) {
   let choice: LlmChoice | null = null;
@@ -720,6 +833,9 @@ export async function callLegacy(name: string, args: Record<string, any>) {
             initialUrl: args.initial_url,
             ja3Profile: args.ja3_profile,
             profileId: args.profile_id,
+            // Sent as is (snake_case) and only when given.
+            secret_ids: Array.isArray(args.secret_ids) && args.secret_ids.length ? args.secret_ids : undefined,
+            save_secrets: typeof args.save_secrets === "boolean" ? args.save_secrets : undefined,
             timeoutMs: (args.timeout_minutes ?? 10) * 60_000,
           }),
         );
@@ -735,6 +851,7 @@ export async function callLegacy(name: string, args: Record<string, any>) {
           llm_key_masked: job.raw?.llm_key_masked,
           llm_key_source: job.raw?.llm_key_source,
           ...llmResultFields(job),
+          ...savedSecretFields(job),
           final_result: job.finalResult,
           error: job.errorMessage,
           error_code: job.errorCode,
@@ -750,6 +867,7 @@ export async function callLegacy(name: string, args: Record<string, any>) {
           live_url: job.liveUrl,
           input_question: job.inputQuestion,
           ...llmResultFields(job),
+          ...savedSecretFields(job),
           final_result: job.finalResult,
           error: job.errorMessage,
           error_code: job.errorCode,
@@ -855,6 +973,10 @@ export async function callLegacy(name: string, args: Record<string, any>) {
         return ok(robotRunView(await apiGet(`/v1/robot-runs/${encodeURIComponent(String(args.run_id))}`)));
       case "solve_captcha_task":
         return await solveCaptchaTask(args);
+      case "list_captcha_types":
+        return await listCaptchaTypes(args);
+      case "report_captcha_result":
+        return await reportCaptchaResult(args);
       default:
         return fail(`unknown tool: ${name}`);
     }

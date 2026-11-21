@@ -36,9 +36,9 @@ function rpc(child, request) {
 
 const TOOL_NAMES = [
   "act", "cancel_job", "close", "create_schedule", "create_webhook", "credits", "delete_webhook",
-  "flow", "get_job", "get_robot_run", "handoff", "list_browsers", "list_identities", "list_job_files",
+  "flow", "get_job", "get_robot_run", "handoff", "list_browsers", "list_captcha_types", "list_identities", "list_job_files",
   "list_llm_keys", "list_models", "list_robots", "list_schedules", "list_webhooks", "observe", "open",
-  "proxy_network", "read", "respond_to_job", "run_robot", "run_task", "screenshot", "secrets",
+  "proxy_network", "read", "report_captcha_result", "respond_to_job", "run_robot", "run_task", "screenshot", "secrets",
   "solve_captcha_task", "start_browser", "stop_browser",
 ];
 

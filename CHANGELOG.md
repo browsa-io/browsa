@@ -2,6 +2,41 @@
 
 Covers the three packages: npm `browsa`, npm `@browsa/mcp` and PyPI `browsa`. They share a version number.
 
+## 0.7.0 (2026-11-21)
+
+All three packages. 0.6.0 of npm `browsa` and PyPI `browsa` and 0.6.1 of `@browsa/mcp` were prepared on 2026-11-19 and never published; everything they had ships here. `@browsa/mcp` still depends on `browsa` ^0.3.1: it calls the API itself and reads the new job fields from the raw job.
+
+### Added
+
+- **Secrets** (Python `client.secrets`, also on `AsyncClient`; TypeScript `client.secrets`): `list`, `list_page` / `listPage` (with the workspace limit), `get` (by id or name), `create` (`login`, `totp` or `value`, with `origins`), `update`, `delete` (`force`; a secret in use raises `APIError` code `SECRET_IN_USE` with `used_by` in the error body), `import_env` / `importEnv` (.env text, `on_conflict`), `usage` (`limit`, `cursor`) and `keypair`. Values are sent plain over TLS; sealed fields (`sealed_value`, `sealed_password`, ... with `keypair_id`) pass through for callers who seal with their own HPKE library. No crypto dependency is added.
+- **`secret_ids` / `secretIds`** on create and run task, sessions (first task and `send_message` / `sendMessage`), `auto`, schedules and `run_recipe` / `runRecipe`. The task text refers to attached secrets as `secrets.NAME`, `secrets.NAME.username`, `secrets.NAME.password` or `secrets.NAME.totp`; a reference to a secret that is not attached is `400 SECRET_NOT_ATTACHED`. `{{secret:NAME}}` and `%NAME%` still work.
+- **`save_secrets` / `saveSecrets`** on the same task-starting calls (not recipe runs): when a run creates a login, the runner saves it as a workspace secret. On by default on the server; the SDKs send it only when you set it, `false` opts out.
+- **Saved secrets on jobs:** `job.saved_secrets` / `job.savedSecrets` (`name`, `id`, `type`, `origins`, `username_masked` on logins, `existing`) and `job.secrets_not_saved` / `job.secretsNotSaved` (`code`, `message`), from the job's result. Also `job.secrets_used` / `job.secretsUsed`.
+- TypeScript `act`: `secret` (a placeholder such as `"NAME:password"`) instead of `text` for `type`; `ActResult.status` includes `secret_origin`. Python `act` already passed `secret=` through; it is now documented.
+- **Captcha client: no poll timer.** `solve` (Python `CaptchaClient` / `AsyncCaptchaClient`, TypeScript `CaptchaClient`) asks the API to hold each call until the task ends (`waitSeconds`, 20 s a call), so the answer arrives when it exists. `create_task` / `createTask` and `get_task_result` / `getTaskResult` take `wait_seconds` / `waitSeconds`. `wait_seconds=0` / `waitSeconds: 0` on the client polls as before, and a server that does not hold calls is polled every `poll_interval`.
+- **Cost and time on a solution:** `sol.cost` (`charged`, `amount`, `unit`, `note`) and `sol.solve_seconds` / `sol.solveSeconds`. The solution object itself is unchanged.
+- **Reports:** `report_correct`, `report_incorrect`, `report(task_id, correct)` / `reportCorrect`, `reportIncorrect`, `report`: tell the API whether the site took a solution. A task can be reported once, within 15 minutes of the solve. Reports are recorded and used to improve solving. The drop-in shims `TwoCaptcha` and `TwoCaptchaSolver` gain `report(id, correct)` (Python) and `goodReport` / `badReport` (TypeScript).
+- **Type catalogue:** `list_types()` / `listTypes()`: every task type with its status, parameters, price and measured pass rate. No key is sent.
+- `CaptchaError.fix` and `.charged`. Builders `geetest_slide_v3`, `geetest_slide_v4`, `cloudflare_challenge` / `geetestSlideV3`, `geetestSlideV4`, `cloudflareChallenge`; `GeeTestSlide` and `AntiCloudflareTask` are in the type lists.
+- Python: `examples/captcha/`, one runnable file per task type (standard library only).
+- **MCP:** `run_task` takes `secret_ids` and `save_secrets`; `run_task` and `get_job` answers list `saved_secrets` and `secrets_not_saved` when the job has them.
+- **MCP:** `list_captcha_types` and `report_captcha_result` in the `captcha` group; `solve_captcha_task` waits on the API instead of a timer and returns `cost`.
+
+### Fixed
+
+- **Robots: updating settings no longer drops `settings.secrets`.** `PATCH /v1/robots/{id}` replaces the whole `settings` object. Python `robots.update(settings=...)` sent only the parts given, and TypeScript `robots.update({ settings })` rebuilt settings from `model`, `proxy` and `browser` alone, so a proxy-only update removed the robot's secrets (and, in TypeScript, reset its model and browser to Auto). Both SDKs now read the robot and send its current settings with the given parts over them, one key at a time (one extra GET). A part given as `None` / `null` goes back to Auto; `settings=None` / `null` still resets everything, without the read.
+- `Robot.settings` keeps `secrets` (names or ids, `[]` when none); `settings_warnings` / `settingsWarnings` are parsed.
+
+### Changed
+
+- **Browser connections have their own host, `cdp.browsa.io`.** The API returns `cdp_http` / `cdp_url` on that host, and the SDKs use the addresses the API returns as they are, on whichever host they name. The fallback addresses `connect()` builds when an agent carries a profile id but no `cdp_http` / `cdp_url` (Python `Client.connect`, TypeScript `client.connect`) are now `https://cdp.browsa.io/api/v1/cdp/<profile>` and `wss://cdp.browsa.io/api/v1/cdp/<profile>/ws/page/...`. Addresses on `browsa.io/api/v1/cdp/...` keep working.
+- TypeScript `connect()`: an empty `cdp_http` / `cdp_url` now falls back the same way a missing one does (Python already did).
+- `@browsa/mcp` builds no CDP address itself; no change.
+
+### Docs
+
+- Python and TypeScript READMEs: a Secrets section; the robots table lists `settings.secrets`; the captcha section covers held waits, cost, reports and the type catalogue.
+
 ## 0.6.0 (`@browsa/mcp` only, published 2026-11-19)
 
 ### Changed

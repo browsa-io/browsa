@@ -1,6 +1,6 @@
 {
   "name": "browsa",
-  "version": "0.5.0",
+  "version": "0.7.0",
   "description": "Official TypeScript SDK for Browsa: real cloud browsers for AI agents (browsa.io)",
   "license": "MIT",
   "author": "Browsa <support@browsa.io>",

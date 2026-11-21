@@ -140,10 +140,32 @@ csv_text = c.robot_runs.export(run.id)          # or format="json"
 | | |
 |---|---|
 | Price | `robot.health.price_credits` per successful row, the same as the agent task. Failed rows are free. |
-| Settings | `model` (records and repairs), `proxy` (Browsa's network: datacenter 5, residential 50 credits/GB; or a saved `proxy_id`, free), `browser` (`os`, `screen`). Unset is Auto. |
+| Settings | `model` (records and repairs), `proxy` (Browsa's network: datacenter 5, residential 50 credits/GB; or a saved `proxy_id`, free), `browser` (`os`, `screen`), `secrets` (names of workspace secrets every row may type). Unset is Auto. `update(settings=...)` changes only the parts you pass. |
 | More | `list`, `get`, `update`, `delete`, `pause`, `resume`, `runs`, `alerts`, `mark_alerts_read`. `AsyncClient` has the same under `await`. Recipes alone: `create_recipe`, `run_recipe`, `get_recipe_run`. |
 
 Guide: <https://browsa.io/guides/robots>.
+
+## Secrets
+
+One vault per workspace for what an agent types but must never read: logins (with an optional one-time-code seed), one-time-code seeds and plain values. Values are write-only, and a secret is typed only on its `origins`.
+
+```python
+c.secrets.create("GITHUB_LOGIN", "login", ["github.com"],
+                 username="release-bot", password=os.environ["GH_PASSWORD"],
+                 description="Bot account for the release checks")
+
+job = c.run_task(
+    task="Log in to github.com with secrets.GITHUB_LOGIN and list my open pull requests",
+    llm="browsa",
+    secret_ids=["GITHUB_LOGIN"],   # attachment is explicit
+)
+```
+
+In the task text: `secrets.NAME`, `secrets.NAME.username`, `secrets.NAME.password`, `secrets.NAME.totp`. A reference to a secret that is not in `secret_ids` is 400 `SECRET_NOT_ATTACHED`. `secret_ids` also works on `auto`, `create_schedule`, `run_recipe` and `send_message`; `act(agent_id, "type", id=14, secret="GITHUB_LOGIN:password")` types one into a field.
+
+When a run creates a login (a signup), it is saved as a secret: `job.saved_secrets` lists what was saved (`name`, `id`, `type`, `origins`, `username_masked`, `existing`) and `job.secrets_not_saved` says why not (`code`, `message`). Pass `save_secrets=False` to opt out.
+
+More: `list`, `get`, `update`, `delete(force=True)`, `import_env`, `usage`, `keypair` (to seal values with your own HPKE library; plain values over TLS are accepted). Changing secrets needs a key with the `secrets:write` scope.
 
 ## Async
 
@@ -310,6 +332,21 @@ print(cap.get_balance())                 # credits
 Builders: `image_to_text`, `recaptcha_v2`, `recaptcha_v3`, `turnstile`, `recaptcha_v2_classification` (and `aws_waf_classification`, `slider`). Each takes `proxy=` (a URL string or `{"type", "host", "port", "username", "password"}`); without one the proxyless type is used. `AsyncCaptchaClient` has the same methods.
 
 A task copied from code for another service works as it is: `RecaptchaV2TaskProxyless`, `TurnstileTask`, `NoCaptchaTaskProxyless` and the like are sent under Browsa's names. Errors raise `CaptchaError` with the API's `code` (`ERROR_CAPTCHA_UNSOLVABLE`, `ERROR_ZERO_BALANCE`, ...).
+
+`solve` does not poll on a timer: it asks the API to hold each call until the task ends, so a 7 s solve is answered at 7 s. The solution says what it cost and how long it took, and you can report whether the site took it:
+
+```python
+sol = cap.solve(tasks.turnstile("https://example.com", "0x4AAAA..."))
+sol.cost            # {"charged": True, "amount": 0.008, "unit": "credits", "note": "Charged once, for this solve."}
+sol.solve_seconds   # 6.42
+cap.report_correct(sol.task_id)     # the site took it
+# cap.report_incorrect(sol.task_id) # or: the site refused it (one report per task, within 15 minutes)
+
+for t in cap.list_types():          # every type: status, parameters, price, measured pass rate (no key needed)
+    print(t["type"], t["status"], t["price"]["creditsPerSolve"], [p["name"] for p in t["required"]])
+```
+
+More builders: `geetest_slide_v3`, `geetest_slide_v4`, `cloudflare_challenge`. A failed solve is free; `CaptchaError` carries `fix` (what to change) and `charged`. Reports are recorded and used to improve solving. One runnable file per task type, with every parameter: [`examples/captcha/`](examples/captcha).
 
 Coming from a library that cannot be pointed at another server:
 

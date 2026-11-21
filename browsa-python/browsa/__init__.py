@@ -31,6 +31,7 @@ from .types import (
     HostedModel, Job, JobFile, JobStatus, LLMKey, Models, OwnKeyModels, Schedule,
     Recipe, RecipeRun, RecipeVersion,
     Robot, RobotAlert, RobotHealth, RobotRun, RobotRunRow,
+    SavedSecret, Secret, SecretsNotSaved,
     Session, SessionBrowser, SessionTurn, Usage, Webhook,
     NetworkProxy, Proxy, ProxyConfig, ProxyNetwork, ProxyNetworkTier,
 )
@@ -66,6 +67,9 @@ __all__ = [
     "RobotHealth",
     "RobotRun",
     "RobotRunRow",
+    "SavedSecret",
+    "Secret",
+    "SecretsNotSaved",
     "Session",
     "SessionBrowser",
     "SessionTurn",

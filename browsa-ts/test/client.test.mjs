@@ -708,3 +708,27 @@ test("downloadFile maps an error envelope to the usual classes", async () => {
   });
   await assert.rejects(() => c.downloadFile("agt_1", "x"), (e) => e instanceof NotFoundError && e.code === "DOWNLOAD_NOT_FOUND" && e.requestId === "r1");
 });
+
+test("connect uses the API's CDP address whatever its host; the fallback is cdp.browsa.io", async () => {
+  const agentReply = (body) => new Client({
+    apiKey: "agt_live_test",
+    fetch: mockFetch({
+      "GET /v1/agents/agt_1": async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }),
+    }),
+  });
+  for (const host of ["browsa.io", "cdp.browsa.io"]) {
+    const out = await agentReply({
+      id: "agt_1", status: "running", profile_id: "p1",
+      cdp_http: `https://${host}/api/v1/cdp/p1`, cdp_url: `wss://${host}/api/v1/cdp/p1/ws/page/T1`,
+    }).connect("agt_1", { framework: "curl" });
+    assert.equal(out.cdp_http, `https://${host}/api/v1/cdp/p1`);
+    assert.equal(out.cdp_url, `wss://${host}/api/v1/cdp/p1/ws/page/T1`);
+    assert.ok(out.snippet.includes(`https://${host}/api/v1/cdp/p1/json/version`));
+  }
+  for (const body of [{ id: "agt_1", status: "running", profile_id: "p1" }, { id: "agt_1", status: "running", profile_id: "p1", cdp_http: "", cdp_url: "" }]) {
+    const out = await agentReply(body).connect("agt_1", { framework: "playwright_ts" });
+    assert.equal(out.cdp_http, "https://cdp.browsa.io/api/v1/cdp/p1");
+    assert.equal(out.cdp_url, "wss://cdp.browsa.io/api/v1/cdp/p1/ws/page/...");
+  }
+  await assert.rejects(() => agentReply({ id: "agt_1", status: "stopped" }).connect("agt_1"), /no CDP URL/);
+});

@@ -123,6 +123,18 @@ export interface Job {
   recordRecipe?: boolean;
   /** The recipe draft recorded from this run (recordRecipe), null until it is stored. */
   recipeDraftId?: string | null;
+  /**
+   * Workspace secrets (secretIds) the job was given, value-free: id, name,
+   * type, origins, description, placeholders. Unset when none.
+   */
+  secretsUsed?: Array<Record<string, unknown>>;
+  /**
+   * Logins the run created (a signup) and saved as workspace secrets, from
+   * the job's result. Empty when none. See CreateTaskOptions.saveSecrets.
+   */
+  savedSecrets: SavedSecret[];
+  /** Why a login the run created was not saved. Unset when nothing was refused. */
+  secretsNotSaved?: SecretsNotSaved;
   /** Untyped escape hatch for fields not yet promoted to typed surface. */
   raw: Record<string, unknown>;
 }
@@ -321,6 +333,10 @@ export interface SendMessageOptions {
   maxCredits?: number;
   /** Same shape as CreateTaskOptions.secrets. */
   secrets?: Record<string, Record<string, string>>;
+  /** Workspace secrets this turn may type, as `secrets.NAME` in the task. See CreateTaskOptions.secretIds. */
+  secretIds?: string[];
+  /** false: do not save a login this turn creates. See CreateTaskOptions.saveSecrets. */
+  saveSecrets?: boolean;
   /** Dedupes retries for 24h: a retried send returns the same turn. */
   idempotencyKey?: string;
 }
@@ -489,6 +505,23 @@ export interface CreateTaskOptions {
    * recipe you can run with runRecipe.
    */
   recordRecipe?: boolean;
+  /**
+   * Workspace secrets (client.secrets) the task may type, by name or id, at
+   * most 20. Refer to them in the task text as `secrets.NAME`,
+   * `secrets.NAME.username`, `secrets.NAME.password` or `secrets.NAME.totp`
+   * (a one-time code), e.g. "log in with secrets.GITHUB_LOGIN". Attachment
+   * is explicit: a reference to a secret not listed here is 400
+   * SECRET_NOT_ATTACHED, an unknown name 400 SECRET_NOT_FOUND. The older
+   * `{{secret:NAME}}` and `%NAME%` forms still work.
+   */
+  secretIds?: string[];
+  /**
+   * When the run creates a login (a signup), the runner saves it as a
+   * workspace secret and the finished job lists it in `savedSecrets` (or
+   * says why not in `secretsNotSaved`). On by default on the server; pass
+   * false to opt out. Sent only when set.
+   */
+  saveSecrets?: boolean;
   /** Pass-through for fields we haven't typed yet. */
   [extra: string]: unknown;
 }
@@ -559,6 +592,11 @@ import { BrowsaError, APIError, AuthError, RateLimitError, InvalidIDError, NotFo
 import type { ErrorEnvelope } from "./errors";
 
 const DEFAULT_BASE_URL = "https://browsa.io";
+/** Browser connections (CDP over WebSocket) have a host of their own that no
+ *  CDN sits in front of. The API's cdp_http / cdp_url always win; this is
+ *  only the fallback connect() builds when an agent carries no CDP address.
+ *  wss://browsa.io/api/v1/cdp/... keeps working. */
+const DEFAULT_CDP_BASE_URL = "https://cdp.browsa.io";
 const DEFAULT_TIMEOUT = 30_000;
 const DEFAULT_POLL_MS = 2000;
 import { VERSION } from "./version";
@@ -609,6 +647,8 @@ function buildTaskBody(opts: CreateTaskOptions): Record<string, unknown> {
     proxy: "proxy",
     proxyId: "proxy_id",
     recordRecipe: "record_recipe",
+    secretIds: "secret_ids",
+    saveSecrets: "save_secrets",
   };
   for (const [src, dst] of Object.entries(map)) {
     const v = (opts as any)[src];
@@ -703,6 +743,10 @@ function snakeToJob(body: Record<string, any>): Job {
     recordRecipe: body.record_recipe === true ? true : undefined,
     recipeDraftId: typeof body.recipe_draft_id === "string" ? body.recipe_draft_id
       : body.record_recipe === true ? null : undefined,
+    secretsUsed: Array.isArray(body.secrets_used)
+      ? body.secrets_used.filter((s: unknown) => s && typeof s === "object") : undefined,
+    savedSecrets: savedSecretsFromResult(result),
+    secretsNotSaved: secretsNotSavedFromResult(result),
     raw: body,
   };
 }
@@ -935,6 +979,14 @@ export interface PageAction {
   y?: number;
   /** type: the text. wait for text: the text. dialog: the prompt answer. */
   text?: string;
+  /**
+   * type, instead of `text`: a workspace secret typed by reference, e.g.
+   * "GITHUB_LOGIN:password" (`NAME`, `NAME:username`, `NAME:password` or
+   * `TOTP:NAME`). The value never reaches you; it is typed only when the
+   * page's origin is one of the secret's origins (status "secret_origin"
+   * and nothing typed otherwise).
+   */
+  secret?: string;
   clear?: boolean;
   submit?: boolean;
   /** press: "Enter", "Control+A", "Tab Tab Enter". */
@@ -967,7 +1019,7 @@ export interface ActResult {
   /** What happened, for a model: the changes, how the page settled, a new view after a navigation. */
   text: string;
   /** "stale": the id is from a view the server no longer has; nothing was done, `text` carries a new view. */
-  status: "ok" | "failed" | "blocked" | "challenge" | "stale";
+  status: "ok" | "failed" | "blocked" | "challenge" | "stale" | "secret_origin" | (string & {});
   reason?: string;
   action: string;
   url?: string;
@@ -1090,6 +1142,12 @@ export interface RunRecipeOptions {
   profileId?: string;
   /** Let steps marked mutation (add to cart, submit) run. Off by default. */
   allowMutations?: boolean;
+  /**
+   * Workspace secrets (names or ids) the recipe's `{{secret:NAME}}` steps
+   * may type. A recipe never attaches a secret itself: a step whose secret
+   * is not listed is 400 SECRET_NOT_ATTACHED.
+   */
+  secretIds?: string[];
 }
 
 function snakeToRecipe(b: Record<string, any>): Recipe {
@@ -1164,6 +1222,19 @@ export interface RobotSettings {
   proxy?: { network?: "datacenter" | "residential"; country?: string; proxyId?: string } | null;
   /** Phantom's operating system and a desktop screen size such as "1920x1080". */
   browser?: { os?: "mac" | "windows" | "linux"; screen?: string } | null;
+  /**
+   * Workspace secrets every row may type: names (or ids), at most 20. Each
+   * row passes them to its recipe run as secretIds. `[]` (or null) is none.
+   */
+  secrets?: string[] | null;
+}
+
+/** Something that may stop a robot's rows from typing a secret (GET /v1/robots). */
+export interface RobotSettingsWarning {
+  /** SECRET_NOT_FOUND, SECRET_ORIGIN_MISMATCH, SECRET_NO_ORIGINS or SECRETS_UNAVAILABLE. */
+  code: string;
+  secret?: string;
+  message: string;
 }
 
 /** When a robot runs on its own. `at` ("09:00"), `weekday` (0 Sunday) and `tz` apply to daily and weekly intervals. */
@@ -1271,8 +1342,10 @@ export interface Robot {
   destinations: RobotDestination[];
   monitors: RobotMonitor[];
   schedule: (RobotSchedule & { id: string; enabled: boolean; nextRunAt: string | null }) | null;
-  /** model, proxy and browser; each null when Auto. */
-  settings: RobotSettings;
+  /** model, proxy and browser (each null when Auto) and secrets (names or ids, [] when none). */
+  settings: RobotSettings & { secrets: string[] };
+  /** What may stop a row from typing one of settings.secrets. [] when nothing. */
+  settingsWarnings: RobotSettingsWarning[];
   sourceJobId: string | null;
   health: RobotHealth | null;
   alertsUnread: number;
@@ -1308,7 +1381,14 @@ export interface UpdateRobotOptions {
   destinations?: RobotDestination[];
   monitors?: RobotMonitor[];
   profileId?: string | null;
-  /** Replaces all settings; null is Auto. */
+  /**
+   * Changes only the parts you pass: `{ proxy: { network: "residential" } }`
+   * keeps the robot's model, browser and secrets. The API replaces the
+   * whole settings object, so update() reads the robot first and sends its
+   * current settings with your parts over them (one extra GET). A part set
+   * to null goes back to Auto; `secrets: []` removes every secret. `null`
+   * for the whole object resets every part to Auto and removes the secrets.
+   */
   settings?: RobotSettings | null;
   /** Re-record from a new task run. */
   fromJobId?: string;
@@ -1327,16 +1407,21 @@ const strOrNull = (v: unknown): string | null => (typeof v === "string" && v !==
 function robotSettingsToWire(s: RobotSettings | null | undefined): Record<string, unknown> | null | undefined {
   if (s === undefined) return undefined;
   if (s === null) return null;
+  // A part given as null is sent as null (Auto); a part left out is not sent.
   const out: Record<string, unknown> = {};
-  if (s.model) out.model = { llm: s.model.llm, llm_key_id: s.model.llmKeyId };
-  if (s.proxy) out.proxy = { network: s.proxy.network, country: s.proxy.country, proxy_id: s.proxy.proxyId };
-  if (s.browser) out.browser = { os: s.browser.os, screen: s.browser.screen };
+  if (s.model !== undefined) out.model = s.model ? { llm: s.model.llm, llm_key_id: s.model.llmKeyId } : null;
+  if (s.proxy !== undefined) {
+    out.proxy = s.proxy ? { network: s.proxy.network, country: s.proxy.country, proxy_id: s.proxy.proxyId } : null;
+  }
+  if (s.browser !== undefined) out.browser = s.browser ? { os: s.browser.os, screen: s.browser.screen } : null;
+  if (s.secrets !== undefined) out.secrets = s.secrets ? [...s.secrets] : [];
   return out;
 }
 
-function robotSettingsFromWire(b: any): RobotSettings {
-  const out: RobotSettings = { model: null, proxy: null, browser: null };
+function robotSettingsFromWire(b: any): RobotSettings & { secrets: string[] } {
+  const out: RobotSettings & { secrets: string[] } = { model: null, proxy: null, browser: null, secrets: [] };
   if (!b || typeof b !== "object") return out;
+  if (Array.isArray(b.secrets)) out.secrets = b.secrets.filter((x: unknown) => typeof x === "string");
   if (b.model) out.model = { llm: b.model.llm || "", ...(b.model.llm_key_id ? { llmKeyId: b.model.llm_key_id } : {}) };
   if (b.proxy) {
     out.proxy = {
@@ -1440,6 +1525,13 @@ function snakeToRobot(b: Record<string, any>): Robot {
         }
       : null,
     settings: robotSettingsFromWire(b.settings),
+    settingsWarnings: Array.isArray(b.settings_warnings)
+      ? b.settings_warnings.filter((w: any) => w && typeof w === "object").map((w: any) => ({
+          code: String(w.code || ""),
+          ...(typeof w.secret === "string" ? { secret: w.secret } : {}),
+          message: String(w.message || ""),
+        }))
+      : [],
     sourceJobId: strOrNull(b.source_job_id),
     health: h
       ? {
@@ -1501,7 +1593,10 @@ export class Robots {
     return snakeToRobot(await this.req<Record<string, any>>("GET", this.path(id)));
   }
 
-  /** PATCH /v1/robots/:id. Only the fields you pass change. */
+  /**
+   * PATCH /v1/robots/:id. Only the fields you pass change, and only the
+   * settings parts you pass change (see UpdateRobotOptions.settings).
+   */
   async update(id: string, opts: UpdateRobotOptions): Promise<Robot> {
     const body: Record<string, unknown> = {};
     const set = (k: string, v: unknown) => { if (v !== undefined) body[k] = v; };
@@ -1512,10 +1607,22 @@ export class Robots {
     set("destinations", destinationsToWire(opts.destinations));
     set("monitors", opts.monitors);
     set("profile_id", opts.profileId);
-    set("settings", robotSettingsToWire(opts.settings));
+    const settings = robotSettingsToWire(opts.settings);
+    set("settings", settings ? await this.mergedSettings(id, settings) : settings);
     set("from_job_id", opts.fromJobId);
     set("recipe_id", opts.recipeId);
     return snakeToRobot(await this.req<Record<string, any>>("PATCH", this.path(id), { body }));
+  }
+
+  /**
+   * The robot's current settings (as the API returns them) with `parts`
+   * over them, key by key. PATCH /v1/robots/:id replaces settings whole, so
+   * sending only the given parts would drop the others (secrets among them).
+   */
+  private async mergedSettings(id: string, parts: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const current = await this.req<Record<string, any>>("GET", this.path(id));
+    const cur = current && typeof current.settings === "object" && current.settings ? current.settings : {};
+    return { ...cur, ...parts };
   }
 
   /** DELETE /v1/robots/:id. Past runs stay billed history. */
@@ -1595,6 +1702,362 @@ export class RobotRuns {
   }
 }
 
+// ── Secrets ───────────────────────────────────────────────────────────────
+
+export type SecretType = "login" | "totp" | "value";
+
+/** A robot or schedule that names a secret (`Secret.usedBy`). */
+export interface SecretUser {
+  kind: "robot" | "schedule" | string;
+  id: string;
+  name: string;
+}
+
+/**
+ * A workspace secret. Values are write-only: nothing returns a value, a seed
+ * or anything derived from one except `usernameMasked`.
+ */
+export interface Secret {
+  id: string;
+  /** `[A-Z0-9_]`, unique in the workspace. Fixed after create. */
+  name: string;
+  type: SecretType | string;
+  /** Shown to the model: what the secret is for, never the value. */
+  description: string;
+  /** Where it may be typed, e.g. ["https://*.github.com"]; ["*"] with anyOrigin. */
+  origins: string[];
+  /** Logins only, e.g. "al…@example.com". */
+  usernameMasked?: string;
+  hasValue: boolean;
+  hasTotp: boolean;
+  /** Present when the secret has a one-time-code seed. */
+  totp?: { digits: number; algorithm: string; period: number };
+  /** References act({ secret }) takes: "NAME:username", "NAME:password", "TOTP:NAME". */
+  placeholders: string[];
+  /** Typed on any https site (origins ["*"]). Not recommended. */
+  anyOrigin: boolean;
+  /** Saved before origins were required: typed nowhere until origins are set. */
+  needsOrigins: boolean;
+  warning?: string;
+  /** The HPKE keypair the last sealed write used, null for a plain write. */
+  keypairId: string | null;
+  createdBy?: { type: "key" | "user" | string; id: string };
+  /** list() and get() only: the robots and schedules that name it. */
+  usedBy: SecretUser[];
+  lastUsedAt: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  raw: Record<string, unknown>;
+}
+
+/** Fields of a secret's value, plain or sealed (see Secrets.keypair). */
+export interface SecretValueFields {
+  /** Logins. */
+  username?: string;
+  password?: string;
+  /** `value` secrets (one line, 3 to 4096 characters), or a `totp` secret's seed. */
+  value?: string;
+  /** A base32 seed or an otpauth://totp/ URI. On update, "" removes a login's seed. */
+  totpSecret?: string;
+  /** 6 to 8, default 6. */
+  digits?: number;
+  /** "SHA1" (default), "SHA256" or "SHA512". */
+  algorithm?: "SHA1" | "SHA256" | "SHA512" | string;
+  /** 15 to 120 seconds, default 30. */
+  period?: number;
+  /** The code your authenticator shows now; checked before anything is saved. */
+  totpCode?: string;
+  /** Sealed forms (base64 HPKE, RFC 9180 base mode), with keypairId. Send a field plain or sealed, not both. */
+  sealedUsername?: string;
+  sealedPassword?: string;
+  sealedValue?: string;
+  sealedTotpSecret?: string;
+  keypairId?: string;
+}
+
+export interface CreateSecretOptions extends SecretValueFields {
+  /** `[A-Z0-9_]{1,64}`; lower case is upper-cased. */
+  name: string;
+  type: SecretType;
+  /**
+   * Where it may be typed: "example.com" (it and its subdomains),
+   * "app.example.com" or "https://app.example.com" (that host only),
+   * "*.example.com". ["*"] (any https site) only with allowAnyOrigin.
+   */
+  origins: string[];
+  description?: string;
+  allowAnyOrigin?: boolean;
+}
+
+export interface UpdateSecretOptions extends SecretValueFields {
+  description?: string;
+  origins?: string[];
+  allowAnyOrigin?: boolean;
+}
+
+/** What importEnv returns. */
+export interface SecretImportResult {
+  secrets: Secret[];
+  created: number;
+  updated: number;
+  /** Names left alone (onConflict "skip"). */
+  skipped: string[];
+  raw: Record<string, unknown>;
+}
+
+/** One use of a secret (Secrets.usage). */
+export interface SecretUse {
+  jobId: string | null;
+  origin: string;
+  /** "typed", "totp" (a one-time code was typed) or "blocked" (wrong origin, nothing typed). */
+  action: "typed" | "totp" | "blocked" | string;
+  /** "task" (the agent), "replay" (a recipe run) or "session" (act). */
+  source: string;
+  at: string;
+  robotId?: string;
+  robotName?: string;
+}
+
+export interface SecretUsagePage {
+  usage: SecretUse[];
+  /** Pass back as `cursor` for older rows; null on the last page. */
+  nextCursor: string | null;
+  limit: number;
+  raw: Record<string, unknown>;
+}
+
+/** The server's HPKE public key for sealing values on your side. */
+export interface SecretKeypair {
+  id: string;
+  /** base64, 32 bytes (X25519). */
+  publicKey: string;
+  /** kem, kdf, aead names and ids, mode "base". */
+  suite: Record<string, unknown>;
+  /** info = infoPrefix + the field name ("value", "username", "password", "totp_secret", "env"). */
+  infoPrefix: string;
+  format?: string;
+  createdAt?: string;
+  useUntil?: string;
+  raw: Record<string, unknown>;
+}
+
+/**
+ * A login a run created and saved as a workspace secret (`job.savedSecrets`).
+ * Never carries a value.
+ */
+export interface SavedSecret {
+  name: string;
+  id?: string;
+  type?: "login" | "value" | string;
+  origins: string[];
+  /** Logins only. */
+  usernameMasked?: string;
+  /** True when an existing secret was updated rather than created. */
+  existing: boolean;
+}
+
+/** Why a run did not save the login it created (`job.secretsNotSaved`). */
+export interface SecretsNotSaved {
+  /**
+   * KEY_SCOPE_REQUIRED (the API key lacks secrets:write), SECRET_ROLE_REQUIRED,
+   * OUTPUT_SECRETS_OFF, SECRETS_UNAVAILABLE, SECRET_LIMIT, NO_USERNAME or SAVE_FAILED.
+   */
+  code: string;
+  message: string;
+}
+
+const secretPath = (idOrName: string, rest = "") => `/v1/secrets/${encodeURIComponent(idOrName)}${rest}`;
+
+function snakeToSecret(b: Record<string, any>): Secret {
+  const t = b.totp && typeof b.totp === "object" ? b.totp : null;
+  const cb = b.created_by && typeof b.created_by === "object" ? b.created_by : null;
+  return {
+    id: b.id || "",
+    name: b.name || "",
+    type: b.type || "",
+    description: b.description || "",
+    origins: Array.isArray(b.origins) ? b.origins : [],
+    ...(typeof b.username_masked === "string" && b.username_masked ? { usernameMasked: b.username_masked } : {}),
+    hasValue: b.has_value === true,
+    hasTotp: b.has_totp === true,
+    ...(t ? { totp: { digits: num(t.digits), algorithm: String(t.algorithm || ""), period: num(t.period) } } : {}),
+    placeholders: Array.isArray(b.placeholders) ? b.placeholders : [],
+    anyOrigin: b.any_origin === true,
+    needsOrigins: b.needs_origins === true,
+    ...(typeof b.warning === "string" && b.warning ? { warning: b.warning } : {}),
+    keypairId: strOrNull(b.keypair_id),
+    ...(cb ? { createdBy: { type: String(cb.type || ""), id: String(cb.id || "") } } : {}),
+    usedBy: Array.isArray(b.used_by)
+      ? b.used_by.filter((u: any) => u && typeof u === "object")
+          .map((u: any) => ({ kind: String(u.kind || ""), id: String(u.id || ""), name: String(u.name || "") }))
+      : [],
+    lastUsedAt: strOrNull(b.last_used_at),
+    createdAt: b.created_at,
+    updatedAt: b.updated_at,
+    raw: b,
+  };
+}
+
+function secretFieldsToWire(o: SecretValueFields & { description?: string; origins?: string[]; allowAnyOrigin?: boolean }): Record<string, unknown> {
+  const map: Record<string, string> = {
+    description: "description", origins: "origins", allowAnyOrigin: "allow_any_origin",
+    username: "username", password: "password", value: "value", totpSecret: "totp_secret",
+    digits: "digits", algorithm: "algorithm", period: "period", totpCode: "totp_code",
+    sealedUsername: "sealed_username", sealedPassword: "sealed_password", sealedValue: "sealed_value",
+    sealedTotpSecret: "sealed_totp_secret", keypairId: "keypair_id",
+  };
+  const out: Record<string, unknown> = {};
+  for (const [src, dst] of Object.entries(map)) {
+    const v = (o as any)[src];
+    if (v !== undefined && v !== null) out[dst] = v;
+  }
+  return out;
+}
+
+function savedSecretsFromResult(result: Record<string, any>): SavedSecret[] {
+  if (!Array.isArray(result.saved_secrets)) return [];
+  return result.saved_secrets
+    .filter((s: any) => s && typeof s === "object")
+    .map((s: any) => ({
+      name: String(s.name || ""),
+      ...(typeof s.id === "string" && s.id ? { id: s.id } : {}),
+      ...(typeof s.type === "string" && s.type ? { type: s.type } : {}),
+      origins: Array.isArray(s.origins) ? s.origins.filter((o: unknown) => typeof o === "string") : [],
+      ...(typeof s.username_masked === "string" && s.username_masked ? { usernameMasked: s.username_masked } : {}),
+      existing: s.existing === true,
+    }));
+}
+
+function secretsNotSavedFromResult(result: Record<string, any>): SecretsNotSaved | undefined {
+  const n = result.secrets_not_saved;
+  if (!n || typeof n !== "object" || !n.code) return undefined;
+  return { code: String(n.code), message: String(n.message || "") };
+}
+
+/**
+ * client.secrets: the workspace vault for what an agent may type but must
+ * never read: site logins (username, password, optional one-time-code
+ * seed), one-time-code seeds and plain values such as API keys. Values are
+ * write-only.
+ *
+ * Use a secret by attaching it, by name or id, in `secretIds` on
+ * createTask / runTask / auto / createSchedule / runRecipe / sendMessage
+ * (or a robot's `settings.secrets`), and refer to it in the task text:
+ * `secrets.NAME`, `secrets.NAME.username`, `secrets.NAME.password`,
+ * `secrets.NAME.totp` (the current one-time code). Attachment is explicit:
+ * a reference to a secret that is not in secretIds is 400
+ * SECRET_NOT_ATTACHED, an unknown name 400 SECRET_NOT_FOUND. The older
+ * `{{secret:NAME}}` and `%NAME%` forms still work. A secret is typed only
+ * on its origins.
+ *
+ * Values may be sent plain (over TLS). To seal them on your side, fetch
+ * keypair() and send the `sealed*` fields with `keypairId` (RFC 9180 HPKE
+ * base mode, any standard HPKE library; this SDK adds no crypto dependency).
+ * Changing secrets needs a key with the `secrets:write` scope (403
+ * KEY_SCOPE_REQUIRED otherwise).
+ */
+export class Secrets {
+  constructor(private readonly req: RequestFn) {}
+
+  /** GET /v1/secrets: every secret of the workspace, with usedBy. */
+  async list(): Promise<Secret[]> {
+    return (await this.listPage()).secrets;
+  }
+
+  /** GET /v1/secrets with the workspace's secret limit. */
+  async listPage(): Promise<{ secrets: Secret[]; limit: number }> {
+    const r = await this.req<{ secrets?: any[]; limit?: number }>("GET", "/v1/secrets");
+    return { secrets: (r?.secrets ?? []).map(snakeToSecret), limit: num(r?.limit) };
+  }
+
+  /** GET /v1/secrets/:idOrName, with usedBy. */
+  async get(idOrName: string): Promise<Secret> {
+    return snakeToSecret(await this.req<Record<string, any>>("GET", secretPath(idOrName)));
+  }
+
+  /** POST /v1/secrets. */
+  async create(opts: CreateSecretOptions): Promise<Secret> {
+    const body = { name: opts.name, type: opts.type, ...secretFieldsToWire(opts) };
+    return snakeToSecret(await this.req<Record<string, any>>("POST", "/v1/secrets", { body }));
+  }
+
+  /** PATCH /v1/secrets/:idOrName. Only the fields you pass change; name and type are fixed. */
+  async update(idOrName: string, opts: UpdateSecretOptions): Promise<Secret> {
+    return snakeToSecret(await this.req<Record<string, any>>("PATCH", secretPath(idOrName), { body: secretFieldsToWire(opts) }));
+  }
+
+  /**
+   * DELETE /v1/secrets/:idOrName. A secret a robot or schedule uses is not
+   * deleted: APIError with code SECRET_IN_USE (409) and `err.body.used_by`.
+   * `force: true` deletes it anyway (robots keep the name and warn,
+   * schedules fail their next run with SECRET_MISSING).
+   */
+  async delete(idOrName: string, opts: { force?: boolean } = {}): Promise<{ deleted: boolean; id: string; name: string }> {
+    return this.req("DELETE", secretPath(idOrName), { query: opts.force ? { force: 1 } : undefined });
+  }
+
+  /**
+   * POST /v1/secrets/import: every `NAME=value` line of a .env text becomes a
+   * `value` secret typed only on `origins`. onConflict: "fail" (default:
+   * nothing is written when one name exists), "skip" or "overwrite". One
+   * transaction, at most 100 lines.
+   */
+  async importEnv(
+    env: string,
+    origins: string[],
+    opts: { description?: string; onConflict?: "fail" | "skip" | "overwrite"; allowAnyOrigin?: boolean } = {},
+  ): Promise<SecretImportResult> {
+    const body: Record<string, unknown> = { env, origins };
+    if (opts.description !== undefined) body.description = opts.description;
+    if (opts.onConflict !== undefined) body.on_conflict = opts.onConflict;
+    if (opts.allowAnyOrigin !== undefined) body.allow_any_origin = opts.allowAnyOrigin;
+    const r = await this.req<Record<string, any>>("POST", "/v1/secrets/import", { body });
+    return {
+      secrets: (Array.isArray(r?.secrets) ? r.secrets : []).map(snakeToSecret),
+      created: num(r?.created),
+      updated: num(r?.updated),
+      skipped: Array.isArray(r?.skipped) ? r.skipped : [],
+      raw: r ?? {},
+    };
+  }
+
+  /** GET /v1/secrets/:idOrName/usage, newest first. `limit` up to 500 (default 100). */
+  async usage(idOrName: string, opts: { limit?: number; cursor?: string } = {}): Promise<SecretUsagePage> {
+    const r = await this.req<Record<string, any>>("GET", secretPath(idOrName, "/usage"), {
+      query: { limit: opts.limit, cursor: opts.cursor },
+    });
+    return {
+      usage: (Array.isArray(r?.usage) ? r.usage : []).map((u: any) => ({
+        jobId: strOrNull(u.job_id),
+        origin: u.origin || "",
+        action: u.action || "",
+        source: u.source || "",
+        at: u.at || "",
+        ...(u.robot_id ? { robotId: u.robot_id } : {}),
+        ...(u.robot_name ? { robotName: u.robot_name } : {}),
+      })),
+      nextCursor: strOrNull(r?.next_cursor),
+      limit: num(r?.limit),
+      raw: r ?? {},
+    };
+  }
+
+  /** GET /v1/secrets/keypair: the server's current HPKE public key (rotated weekly). */
+  async keypair(): Promise<SecretKeypair> {
+    const r = (await this.req<Record<string, any>>("GET", "/v1/secrets/keypair")) ?? {};
+    return {
+      id: r.id || "",
+      publicKey: r.public_key || "",
+      suite: r.suite && typeof r.suite === "object" ? r.suite : {},
+      infoPrefix: r.info_prefix || "",
+      format: r.format,
+      createdAt: r.created_at,
+      useUntil: r.use_until,
+      raw: r,
+    };
+  }
+}
+
 export class Client {
   private apiKey: string;
   private baseUrl: string;
@@ -1606,6 +2069,8 @@ export class Client {
   readonly robots: Robots;
   /** One run of a robot: rows, wait, export. */
   readonly robotRuns: RobotRuns;
+  /** Secrets: the workspace vault (list, get, create, update, delete, importEnv, usage, keypair). */
+  readonly secrets: Secrets;
 
   constructor(opts: ClientOptions) {
     if (!opts.apiKey || !opts.apiKey.startsWith("agt_")) {
@@ -1621,6 +2086,7 @@ export class Client {
     const req: RequestFn = (method, path, o) => this.request(method, path, o);
     this.robots = new Robots(req);
     this.robotRuns = new RobotRuns(req);
+    this.secrets = new Secrets(req);
   }
 
   private async request<T = unknown>(
@@ -2018,6 +2484,7 @@ export class Client {
     if (opts.proxy != null) body.proxy = opts.proxy;
     if (opts.profileId != null) body.profile_id = opts.profileId;
     if (opts.allowMutations) body.allow_mutations = true;
+    if (opts.secretIds != null) body.secret_ids = opts.secretIds;
     const wait = Math.min(Math.max(opts.wait ?? 0, 0), 60);
     const r = await this.request<Record<string, any>>("POST", `/v1/recipes/${encodeURIComponent(id)}/run`, {
       body,
@@ -2466,15 +2933,21 @@ export class Client {
    *  - interactive tasks fall through to a regular task (job_id).
    *
    * Response carries `routed_via: "scrape" | "task"` for client branching.
+   *
+   * secretIds / saveSecrets: as on createTask. A task that names a secret
+   * always runs as an agent task, never the plain fetch.
    */
   async auto(task: string, opts: {
     llm?: string; llmApiKey?: string; llmKeyId?: string; llmBaseUrl?: string;
     maxSteps?: number; maxCostUsd?: number; maxCredits?: number; country?: string;
     reasoning?: Reasoning;
+    secretIds?: string[]; saveSecrets?: boolean;
     [k: string]: any;
   } = {}): Promise<Record<string, any>> {
-    const { llm, llmApiKey, llmKeyId, llmBaseUrl, maxSteps, maxCostUsd, maxCredits, country, ...rest } = opts;
+    const { llm, llmApiKey, llmKeyId, llmBaseUrl, maxSteps, maxCostUsd, maxCredits, country, secretIds, saveSecrets, ...rest } = opts;
     const body: Record<string, any> = { task, ...rest };
+    if (secretIds != null) body.secret_ids = secretIds;
+    if (saveSecrets != null) body.save_secrets = saveSecrets;
     if (llm) body.llm = llm;
     if (llmApiKey) body.llm_api_key = llmApiKey;
     if (llmKeyId) body.llm_key_id = llmKeyId;
@@ -2500,8 +2973,9 @@ export class Client {
     const framework = opts.framework ?? "playwright_ts";
     const agent = await this.getAgent(agentId);
     const profileId = (agent.profile_id as string) ?? "";
-    const cdpHttp = (agent.cdp_http as string) ?? (profileId ? `https://browsa.io/api/v1/cdp/${profileId}` : "");
-    const cdpUrl  = (agent.cdp_url  as string) ?? (profileId ? `wss://browsa.io/api/v1/cdp/${profileId}/ws/page/...` : "");
+    const cdpWsBase = DEFAULT_CDP_BASE_URL.replace(/^https:/, "wss:");
+    const cdpHttp = (agent.cdp_http as string) || (profileId ? `${DEFAULT_CDP_BASE_URL}/api/v1/cdp/${profileId}` : "");
+    const cdpUrl  = (agent.cdp_url  as string) || (profileId ? `${cdpWsBase}/api/v1/cdp/${profileId}/ws/page/...` : "");
     if (!cdpHttp) throw new Error(`agent ${agentId} has no CDP URL — is it status=running? current status: ${agent.status ?? "unknown"}`);
     const snippets: Record<string, string> = {
       playwright_py: `import asyncio

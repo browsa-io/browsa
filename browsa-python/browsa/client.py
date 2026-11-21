@@ -23,11 +23,16 @@ from typing import Any, AsyncIterator, Iterable, Iterator, List, Optional, Union
 from . import errors
 from .types import (
     Job, JobFile, JobStatus, LLMKey, Models, Proxy, ProxyNetwork, Recipe, RecipeRun, RecipeVersion,
-    Robot, RobotAlert, RobotRun, Schedule, Session, Webhook,
+    Robot, RobotAlert, RobotRun, Schedule, Secret, Session, Webhook,
 )
 from ._version import __version__
 
 DEFAULT_BASE_URL = "https://browsa.io"
+# Browser connections (CDP over WebSocket) have a host of their own that no
+# CDN sits in front of. The API's cdp_http / cdp_url always win; this is only
+# the fallback connect() builds when an agent carries no CDP address.
+# wss://browsa.io/api/v1/cdp/... keeps working.
+DEFAULT_CDP_BASE_URL = "https://cdp.browsa.io"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_POLL_INTERVAL = 2.0  # seconds between job-status polls
 USER_AGENT = f"browsa-python/{__version__}"
@@ -147,9 +152,11 @@ class Robots:
 
     ``settings`` is ``{"model": {"llm", "llm_key_id"?}, "proxy": {"network":
     "datacenter" | "residential", "country"?} or {"proxy_id"}, "browser":
-    {"os": "mac" | "windows" | "linux", "screen": "1920x1080"}}``; a missing or
-    None part is Auto. ``schedule`` is ``{"interval_seconds": 86400, "at":
-    "09:00", "weekday": 1, "tz": "Europe/Paris"}``.
+    {"os": "mac" | "windows" | "linux", "screen": "1920x1080"}, "secrets":
+    ["GITHUB_LOGIN", ...]}``; a missing or None part is Auto (no secrets).
+    ``secrets`` names the workspace secrets (names or ids) every row may
+    type. ``schedule`` is ``{"interval_seconds": 86400, "at": "09:00",
+    "weekday": 1, "tz": "Europe/Paris"}``.
     """
 
     def __init__(self, t: _Transport) -> None:
@@ -209,15 +216,34 @@ class Robots:
         recipe_id: Any = _UNSET,
     ) -> Robot:
         """PATCH /v1/robots/:id. Only the fields you pass change. None clears
-        ``schedule``, ``profile_id`` and ``settings`` (Auto); ``settings``
-        replaces all three parts. ``from_job_id`` re-records the robot."""
+        ``schedule``, ``profile_id`` and ``settings`` (every part Auto, no
+        secrets). ``from_job_id`` re-records the robot.
+
+        ``settings`` changes only the parts you pass: ``settings={"proxy":
+        {"network": "residential"}}`` keeps the robot's model, browser and
+        secrets. The API replaces the whole settings object, so the SDK reads
+        the robot first and sends its current settings with your parts over
+        them (one extra GET). A part set to None goes back to Auto;
+        ``{"secrets": []}`` removes every secret."""
         fields = {
             "name": name, "description": description, "inputs": inputs, "schedule": schedule,
             "destinations": destinations, "monitors": monitors, "profile_id": profile_id,
             "settings": settings, "from_job_id": from_job_id, "recipe_id": recipe_id,
         }
         body = {k: v for k, v in fields.items() if v is not _UNSET}
+        if isinstance(settings, dict):
+            body["settings"] = self._merged_settings(robot_id, settings)
         return Robot.from_response(self._t.request("PATCH", self._path(robot_id), body=body))
+
+    def _merged_settings(self, robot_id: str, parts: dict) -> dict:
+        """The robot's current settings with ``parts`` over them, key by key.
+        PATCH /v1/robots/:id replaces settings whole, so sending only the
+        given parts would drop the others (settings.secrets among them)."""
+        current = self._t.request("GET", self._path(robot_id)) or {}
+        cur = current.get("settings") if isinstance(current, dict) else None
+        merged = dict(cur) if isinstance(cur, dict) else {}
+        merged.update(parts)
+        return merged
 
     def delete(self, robot_id: str) -> None:
         """DELETE /v1/robots/:id. Past runs stay as billing history."""
@@ -283,6 +309,183 @@ class RobotRuns:
         return out
 
 
+def _secret_path(id_or_name: str, rest: str = "") -> str:
+    return f"/v1/secrets/{_q(id_or_name)}{rest}"
+
+
+class Secrets:
+    """``client.secrets``: the workspace vault for what an agent may type but
+    must never read: site logins (``type="login"``: username, password and
+    an optional one-time-code seed), one-time-code seeds (``"totp"``) and
+    plain values such as API keys (``"value"``). Values are write-only; no
+    call returns one.
+
+    Use a secret by attaching it, by name or id, in ``secret_ids`` on
+    create_task / run_task / auto / create_schedule / run_recipe /
+    send_message (or a robot's ``settings["secrets"]``), and refer to it in
+    the task text: ``secrets.NAME`` (the value, or a login's username and
+    password as the page needs), ``secrets.NAME.username``,
+    ``secrets.NAME.password``, ``secrets.NAME.totp`` (the current one-time
+    code). Attachment is explicit: a reference to a secret that is not in
+    ``secret_ids`` is 400 SECRET_NOT_ATTACHED, an unknown name 400
+    SECRET_NOT_FOUND. The older ``{{secret:NAME}}`` and ``%NAME%`` forms
+    still work. A secret is typed only on its ``origins``.
+
+    Values may be sent plain (over TLS). To seal them on your side instead,
+    fetch keypair() and send ``sealed_<field>`` with ``keypair_id`` as extra
+    keyword arguments of create() / update() (RFC 9180 HPKE base mode; the
+    SDK adds no crypto dependency, so bring your own HPKE library).
+
+    Changing secrets needs a key with the ``secrets:write`` scope (403
+    KEY_SCOPE_REQUIRED otherwise) or, from the dashboard, an owner or admin.
+    """
+
+    def __init__(self, t: _Transport) -> None:
+        self._t = t
+
+    def list(self) -> List[Secret]:
+        """GET /v1/secrets: every secret of the workspace with ``used_by``.
+        The workspace limit is on ``list_page()["limit"]``."""
+        return self.list_page()["secrets"]
+
+    def list_page(self) -> dict:
+        """GET /v1/secrets as ``{"secrets": [Secret], "limit": int}``."""
+        body = self._t.request("GET", "/v1/secrets") or {}
+        return {"secrets": [Secret.from_response(s) for s in body.get("secrets") or []],
+                "limit": body.get("limit")}
+
+    def get(self, id_or_name: str) -> Secret:
+        """GET /v1/secrets/:id_or_name with ``used_by``."""
+        return Secret.from_response(self._t.request("GET", _secret_path(id_or_name)))
+
+    def create(
+        self,
+        name: str,
+        type: str,
+        origins: List[str],
+        *,
+        description: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        value: Optional[str] = None,
+        totp_secret: Optional[str] = None,
+        digits: Optional[int] = None,
+        algorithm: Optional[str] = None,
+        period: Optional[int] = None,
+        totp_code: Optional[str] = None,
+        allow_any_origin: Optional[bool] = None,
+        **extra: Any,
+    ) -> Secret:
+        """POST /v1/secrets. ``name`` is ``[A-Z0-9_]`` (lower case is
+        upper-cased). ``type``: ``"login"`` (username + password, optional
+        totp_secret), ``"totp"`` (value or totp_secret: a base32 seed or an
+        otpauth:// URI) or ``"value"`` (value, one line). ``origins``:
+        where it may be typed, e.g. ``["github.com"]`` (it and its
+        subdomains) or ``["https://app.example.com"]``; ``["*"]`` only with
+        ``allow_any_origin=True``. ``totp_code``: the code your
+        authenticator shows now, checked before anything is saved.
+        ``description`` is shown to the model: say what it is for, never the
+        value. Sealed fields (``sealed_password=..., keypair_id=...``) go in
+        as extra keyword arguments."""
+        body: dict = {"name": name, "type": type, "origins": list(origins)}
+        for k, v in {
+            "description": description, "username": username, "password": password,
+            "value": value, "totp_secret": totp_secret, "digits": digits,
+            "algorithm": algorithm, "period": period, "totp_code": totp_code,
+            "allow_any_origin": allow_any_origin,
+        }.items():
+            if v is not None:
+                body[k] = v
+        body.update({k: v for k, v in extra.items() if v is not None})
+        return Secret.from_response(self._t.request("POST", "/v1/secrets", body=body))
+
+    def update(
+        self,
+        id_or_name: str,
+        *,
+        description: Optional[str] = None,
+        origins: Optional[List[str]] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        value: Optional[str] = None,
+        totp_secret: Optional[str] = None,
+        digits: Optional[int] = None,
+        algorithm: Optional[str] = None,
+        period: Optional[int] = None,
+        totp_code: Optional[str] = None,
+        allow_any_origin: Optional[bool] = None,
+        **extra: Any,
+    ) -> Secret:
+        """PATCH /v1/secrets/:id_or_name. Only the fields you pass change;
+        the name and type are fixed. ``totp_secret=""`` removes a login's
+        one-time-code seed."""
+        body: dict = {}
+        for k, v in {
+            "description": description, "origins": list(origins) if origins is not None else None,
+            "username": username, "password": password, "value": value,
+            "totp_secret": totp_secret, "digits": digits, "algorithm": algorithm,
+            "period": period, "totp_code": totp_code, "allow_any_origin": allow_any_origin,
+        }.items():
+            if v is not None:
+                body[k] = v
+        body.update({k: v for k, v in extra.items() if v is not None})
+        return Secret.from_response(self._t.request("PATCH", _secret_path(id_or_name), body=body))
+
+    def delete(self, id_or_name: str, *, force: bool = False) -> dict:
+        """DELETE /v1/secrets/:id_or_name -> ``{"deleted": True, "id", "name"}``.
+
+        A secret a robot or schedule uses is not deleted: APIError with code
+        ``SECRET_IN_USE`` (409) whose ``err.body["used_by"]`` lists them.
+        ``force=True`` deletes it anyway (robots keep the name and warn,
+        schedules fail their next run with SECRET_MISSING)."""
+        query = {"force": "1"} if force else None
+        return self._t.request("DELETE", _secret_path(id_or_name), query=query) or {}
+
+    def import_env(
+        self,
+        env: str,
+        origins: List[str],
+        *,
+        description: Optional[str] = None,
+        on_conflict: Optional[str] = None,
+        allow_any_origin: Optional[bool] = None,
+    ) -> dict:
+        """POST /v1/secrets/import: every ``NAME=value`` line of a .env text
+        becomes a ``value`` secret typed only on ``origins``. ``on_conflict``:
+        ``"fail"`` (default: nothing is written when one name exists),
+        ``"skip"`` or ``"overwrite"``. One transaction, at most 100 lines.
+        Returns ``{"secrets": [Secret], "created": int, "updated": int,
+        "skipped": [names]}``."""
+        body: dict = {"env": env, "origins": list(origins)}
+        if description is not None:
+            body["description"] = description
+        if on_conflict is not None:
+            body["on_conflict"] = on_conflict
+        if allow_any_origin is not None:
+            body["allow_any_origin"] = allow_any_origin
+        out = self._t.request("POST", "/v1/secrets/import", body=body) or {}
+        out = dict(out) if isinstance(out, dict) else {}
+        out["secrets"] = [Secret.from_response(s) for s in out.get("secrets") or []]
+        return out
+
+    def usage(self, id_or_name: str, *, limit: Optional[int] = None,
+              cursor: Optional[str] = None) -> dict:
+        """GET /v1/secrets/:id_or_name/usage, newest first: ``{"usage":
+        [{"job_id", "origin", "action": "typed" | "totp" | "blocked",
+        "source", "at", ...}], "next_cursor"}``. Pass ``next_cursor`` back as
+        ``cursor`` for older rows; it is None on the last page. ``limit`` up
+        to 500 (default 100)."""
+        return self._t.request("GET", _secret_path(id_or_name, "/usage"),
+                               query={"limit": limit, "cursor": cursor}) or {}
+
+    def keypair(self) -> dict:
+        """GET /v1/secrets/keypair: the server's current HPKE public key for
+        sealing values on your side (``id``, ``public_key``, ``suite``,
+        ``info_prefix``, ``use_until``). Optional: plain values over TLS are
+        accepted too."""
+        return self._t.request("GET", "/v1/secrets/keypair") or {}
+
+
 class _AsyncWrap:
     """Runs each method of a sync namespace in a worker thread."""
 
@@ -332,6 +535,8 @@ class Client:
         self.robots = Robots(self._t)
         #: One run of a robot (get, wait, export).
         self.robot_runs = RobotRuns(self._t)
+        #: Secrets: the workspace vault (list, get, create, update, delete, import_env, usage, keypair).
+        self.secrets = Secrets(self._t)
         # Page view sessions seen by observe()/act(): agent id ->
         # {"last": tab id, "tabs": {tab id: session}}. Sent back so the
         # server can tell when element ids are from a view it no longer has.
@@ -372,6 +577,8 @@ class Client:
         proxy: Optional[Proxy] = None,
         proxy_id: Optional[str] = None,
         record_recipe: Optional[bool] = None,
+        secret_ids: Optional[List[str]] = None,
+        save_secrets: Optional[bool] = None,
         **extra: Any,
     ) -> Job:
         """POST /v1/tasks — submit a task; returns immediately with a job id.
@@ -416,6 +623,20 @@ class Client:
         are a-z, 0-9 and _ (max 40); values are 3 to 512 characters. Values
         are encrypted at rest and deleted when the task ends; the job shows
         only ``secret_names``.
+
+        secret_ids: workspace secrets (``client.secrets``) the task may type,
+        by name or id, at most 20. Refer to them in the task text as
+        ``secrets.NAME``, ``secrets.NAME.username``, ``secrets.NAME.password``
+        or ``secrets.NAME.totp`` (a one-time code), e.g. "log in with
+        secrets.GITHUB_LOGIN". Attachment is explicit: a reference to a
+        secret not in secret_ids is 400 SECRET_NOT_ATTACHED, an unknown name
+        400 SECRET_NOT_FOUND. ``{{secret:NAME}}`` and ``%NAME%`` still work.
+
+        save_secrets: when the run creates a login (a signup), the runner
+        saves it as a workspace secret; the finished job lists it in
+        ``job.saved_secrets`` (or says why not in ``job.secrets_not_saved``).
+        On by default on the server; pass False to opt out. Sent only when
+        given.
 
         keep_browser: start a session. The browser stays up after the task
         ends, until ``browser_ttl_seconds`` after it launched (300 to 3600,
@@ -467,6 +688,8 @@ class Client:
             "proxy": proxy,
             "proxy_id": proxy_id,
             "record_recipe": record_recipe,
+            "secret_ids": list(secret_ids) if secret_ids is not None else None,
+            "save_secrets": save_secrets,
         }.items():
             if v is not None:
                 body[k] = v
@@ -605,6 +828,8 @@ class Client:
         max_credits: Optional[int] = None,
         llm_key_id: Optional[str] = None,
         reasoning: Optional[str] = None,
+        secret_ids: Optional[List[str]] = None,
+        save_secrets: Optional[bool] = None,
         **kwargs: Any,
     ) -> Job:
         """One-shot: submit + wait + return the terminal Job. The "hello world"
@@ -613,6 +838,10 @@ class Client:
 
         secrets: ``{"<domain>": {"<name>": "<value>"}}`` credentials the agent
         types by name; the model sees only the names. See create_task().
+
+        secret_ids: workspace secrets (names or ids) the task may type, as
+        ``secrets.NAME`` in the task text. save_secrets=False: do not save a
+        login the run creates (``job.saved_secrets``). See create_task().
 
         max_credits: per-task credit cap, see create_task().
 
@@ -632,6 +861,8 @@ class Client:
             secrets=secrets,
             max_credits=max_credits,
             reasoning=reasoning,
+            secret_ids=secret_ids,
+            save_secrets=save_secrets,
             **kwargs,
         )
         return self.wait_for_job(job.id, timeout=timeout, on_progress=on_progress)
@@ -683,6 +914,8 @@ class Client:
         max_credits: Optional[int] = None,
         secrets: Optional[dict[str, dict[str, str]]] = None,
         idempotency_key: Optional[str] = None,
+        secret_ids: Optional[List[str]] = None,
+        save_secrets: Optional[bool] = None,
         **extra: Any,
     ) -> Job:
         """POST /v1/sessions/:id/messages: queue a follow-up task on the
@@ -703,6 +936,10 @@ class Client:
         gone (start a new session), SESSION_BUSY (409) while a turn is still
         queued or running, and NotFoundError for an unknown id.
         idempotency_key dedupes retries for 24h, like the other create calls.
+
+        secret_ids: workspace secrets (names or ids) this turn may type, as
+        ``secrets.NAME`` in the task text; save_secrets=False: do not save a
+        login this turn creates. See create_task().
         """
         body: dict = {"task": task}
         for k, v in {
@@ -715,6 +952,8 @@ class Client:
             "max_cost_usd": max_cost_usd,
             "max_credits": max_credits,
             "secrets": secrets,
+            "secret_ids": list(secret_ids) if secret_ids is not None else None,
+            "save_secrets": save_secrets,
         }.items():
             if v is not None:
                 body[k] = v
@@ -789,6 +1028,8 @@ class Client:
         os_type: Optional[str] = None,
         proxy: Optional[Proxy] = None,
         proxy_id: Optional[str] = None,
+        secret_ids: Optional[List[str]] = None,
+        save_secrets: Optional[bool] = None,
         **extra: Any,
     ) -> Schedule:
         """POST /v1/schedules — create a recurring task (interval 3600–2592000s).
@@ -801,6 +1042,11 @@ class Client:
         reasoning ("low", "medium" or "high") applies to every run.
 
         proxy / proxy_id: as on create_task(), used for every run.
+
+        secret_ids: workspace secrets (names or ids) every run may type,
+        resolved when the schedule is saved; each run reads the current
+        value. save_secrets=False: runs do not save logins they create. See
+        create_task().
         """
         body: dict = {"task": task, "framework": framework,
                       "interval_seconds": interval_seconds}
@@ -809,7 +1055,9 @@ class Client:
             "llm_key_id": llm_key_id, "llm_base_url": llm_base_url,
             "max_steps": max_steps, "reasoning": reasoning,
             "initial_url": initial_url, "country": country,
-            "os_type": os_type, "proxy": proxy, "proxy_id": proxy_id, **extra,
+            "os_type": os_type, "proxy": proxy, "proxy_id": proxy_id,
+            "secret_ids": list(secret_ids) if secret_ids is not None else None,
+            "save_secrets": save_secrets, **extra,
         }.items():
             if v is not None:
                 body[k] = v
@@ -902,6 +1150,7 @@ class Client:
         proxy: Optional[dict] = None,
         profile_id: Optional[str] = None,
         allow_mutations: bool = False,
+        secret_ids: Optional[List[str]] = None,
     ) -> RecipeRun:
         """POST /v1/recipes/:id/run. ``params`` are checked against the
         recipe's params schema (400 PARAMS_INVALID). With ``wait`` (seconds,
@@ -909,8 +1158,14 @@ class Client:
         otherwise the queued run (see get_recipe_run). ``proxy`` is
         ``{"network": "auto" | "datacenter" | "residential" | "default",
         "country": "us"}``; the recipe's exit when omitted. A successful run
-        costs the recipe's price_credits; failed runs cost nothing."""
+        costs the recipe's price_credits; failed runs cost nothing.
+
+        ``secret_ids``: the workspace secrets (names or ids) the recipe's
+        ``{{secret:NAME}}`` steps may type. A recipe never attaches a secret
+        itself: a step whose secret is not listed is 400 SECRET_NOT_ATTACHED."""
         body: dict = {"params": params or {}}
+        if secret_ids is not None:
+            body["secret_ids"] = list(secret_ids)
         if wait is not None:
             body["wait"] = wait
         if webhook_url is not None:
@@ -1416,6 +1671,13 @@ class Client:
         ``files`` (upload); ``accept``, ``text`` (dialog). ``for_`` is sent
         as ``for``.
 
+        ``secret`` instead of ``text`` on ``type`` types a workspace secret
+        by reference: ``c.act(agent_id, "type", id=14,
+        secret="GITHUB_LOGIN:password")`` (``NAME``, ``NAME:username``,
+        ``NAME:password`` or ``TOTP:NAME``). The value never reaches you; it
+        is typed only when the page's origin is one of the secret's origins
+        (status ``secret_origin`` and nothing typed otherwise).
+
         Returns a dict: ``text`` (the diff, how the page settled, a new view
         after a navigation), ``status``, ``reason``, ``url``, ``session``,
         ``ids_reset``. ``status`` is ``ok``, ``failed``, ``blocked``,
@@ -1441,6 +1703,8 @@ class Client:
              max_cost_usd: Optional[float] = None,
              max_credits: Optional[int] = None,
              country: Optional[str] = None, llm_key_id: Optional[str] = None,
+             secret_ids: Optional[List[str]] = None,
+             save_secrets: Optional[bool] = None,
              **opts: Any) -> dict:
         """POST /v1/auto — smart-router. Same body as create_task but the
         platform inspects the task wording:
@@ -1453,8 +1717,10 @@ class Client:
         arguments.
 
         Response carries `routed_via: "scrape" | "task"` so you can
-        branch your client code accordingly. Competitor-parity feature
-        2026-06-09: matches browser-use cloud's Computer Use v3 dispatch.
+        branch your client code accordingly.
+
+        secret_ids / save_secrets: as on create_task(). A task that names a
+        secret always runs as an agent task, never the plain fetch.
         """
         body: dict = {"task": task}
         if llm is not None: body["llm"] = llm
@@ -1465,6 +1731,8 @@ class Client:
         if max_cost_usd is not None: body["max_cost_usd"] = max_cost_usd
         if max_credits is not None: body["max_credits"] = max_credits
         if country is not None: body["country"] = country
+        if secret_ids is not None: body["secret_ids"] = list(secret_ids)
+        if save_secrets is not None: body["save_secrets"] = save_secrets
         body.update(opts)
         return self._t.request("POST", "/v1/auto", body=body, timeout=120.0)
 
@@ -1482,11 +1750,12 @@ class Client:
         """
         agent = self.get_agent(agent_id)
         profile_id = agent.get("profile_id") or ""
+        cdp_ws_base = "wss://" + DEFAULT_CDP_BASE_URL.split("://", 1)[1]
         cdp_http = agent.get("cdp_http") or (
-            f"https://browsa.io/api/v1/cdp/{profile_id}" if profile_id else ""
+            f"{DEFAULT_CDP_BASE_URL}/api/v1/cdp/{profile_id}" if profile_id else ""
         )
         cdp_url = agent.get("cdp_url") or (
-            f"wss://browsa.io/api/v1/cdp/{profile_id}/ws/page/..." if profile_id else ""
+            f"{cdp_ws_base}/api/v1/cdp/{profile_id}/ws/page/..." if profile_id else ""
         )
         if not cdp_http:
             raise RuntimeError(
@@ -1613,6 +1882,8 @@ class AsyncClient:
         self.robots: Any = _AsyncWrap(self._sync.robots)
         #: Same methods as Client.robot_runs, awaitable.
         self.robot_runs: Any = _AsyncWrap(self._sync.robot_runs)
+        #: Same methods as Client.secrets, awaitable.
+        self.secrets: Any = _AsyncWrap(self._sync.secrets)
 
     async def __aenter__(self) -> "AsyncClient":
         return self
