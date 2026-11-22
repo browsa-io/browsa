@@ -1,7 +1,7 @@
 // Settings from the environment and the command line. Nothing here writes
 // a file: the server keeps its state in memory only.
 
-export const VERSION = "0.8.0";
+export const VERSION = "0.8.1";
 // Install forms pass optional settings as empty strings: empty means unset.
 export const API_KEY = process.env.BROWSA_API_KEY?.trim() || undefined;
 export const BASE_URL = (process.env.BROWSA_BASE_URL || "https://browsa.io").replace(/\/+$/, "");
@@ -9,7 +9,61 @@ export const BASE_URL_SET = !!process.env.BROWSA_BASE_URL;
 export const DEFAULT_COUNTRY = process.env.BROWSA_COUNTRY || undefined;
 export const KEYS_URL = "https://app.browsa.io/dashboard/keys";
 export const NO_KEY_MESSAGE =
-  "BROWSA_API_KEY is not set. Add it to this MCP server's env (mint one at " + KEYS_URL + "), then restart the server.";
+  "BROWSA_API_KEY is not set. Create a key at " + KEYS_URL + ", add it to this MCP server's env, then restart the server.";
+
+/** `--help` / `-h` or `--version` / `-v` on the command line: print and exit, do not start the server. */
+export function cliFlag(argv: string[] = process.argv.slice(2)): "help" | "version" | undefined {
+  if (argv.includes("--help") || argv.includes("-h")) return "help";
+  if (argv.includes("--version") || argv.includes("-v") || argv.includes("-V")) return "version";
+  return undefined;
+}
+
+export const HELP = `browsa-mcp ${VERSION}: MCP server for Browsa (stdio)
+
+Cloud browsers (Phantom) for an MCP client, and captcha solving for a browser of your own.
+An MCP client starts this command; it speaks MCP on stdin and stdout.
+
+Usage:
+  npx -y @browsa/mcp [--tools=<groups>]
+  npx -y @browsa/mcp --help | --version
+
+Options:
+  --tools=<groups>   Optional tool groups, comma separated (same as BROWSA_MCP_TOOLS):
+                     tasks, robots, schedules, webhooks, cdp, captcha, captcha_page, admin, or all.
+                     -name takes a group or a tool off; -core takes the nine core tools off.
+  -h, --help         Print this and exit
+  -v, --version      Print the version and exit
+
+Environment:
+  BROWSA_API_KEY                  Your Browsa API key. Create a key at ${KEYS_URL}
+                                  Without it the tools are listed; detect_captcha, captcha_allowance
+                                  and list_captcha_types still answer.
+  BROWSA_MCP_TOOLS                Optional tool groups, as --tools
+  BROWSA_BASE_URL                 Default https://browsa.io
+  BROWSA_COUNTRY                  Default exit country for open
+  BROWSA_LLM, BROWSA_LLM_KEY_ID, BROWSA_LLM_API_KEY     Model settings for the tasks group
+  BROWSA_CAPTCHA_URL              Default https://captcha.browsa.io
+  BROWSA_CAPTCHA_MAX_CREDITS, BROWSA_CAPTCHA_RATE_PER_MINUTE, BROWSA_CAPTCHA_CONCURRENCY
+                                  Local limits for captcha solves (off unless set)
+  BROWSA_MCP_RETRIES              Default 2; 0 for none
+  BROWSA_MCP_REDACT=off           Show URL tokens (debugging only)
+
+Core tools (on by default): open, observe, act, read, screenshot, secrets, handoff, flow, close
+
+Docs: https://browsa.io/guides/mcp-server
+Source: https://github.com/browsa-io/browsa/tree/main/browsa-mcp
+`;
+
+/** What the server tells a client about itself at initialize (MCP "instructions"). */
+export const INSTRUCTIONS =
+  "Browsa gives you a real cloud browser (Phantom) and, for a browser of your own, captcha solving. " +
+  "Browser tools: open a page, observe it as text (one line per element with an id), act on an id, read a container, " +
+  "and close the browser when done; a browser left open keeps running until its ttl. " +
+  "act answers with a status on its first line and, when something stopped, a `next:` line: follow it. " +
+  "Type saved secrets with act secret (their values never reach you); call handoff when a person has to step in. " +
+  "Opening a browser, tasks, robots and captcha solves spend the workspace's credits; reads and lists are free. " +
+  "Tools that are not listed are in optional groups: the error names the BROWSA_MCP_TOOLS setting that turns one on. " +
+  "Without BROWSA_API_KEY only detect_captcha, captcha_allowance and list_captcha_types answer.";
 
 // URL redaction can be switched off for debugging (BROWSA_MCP_REDACT=off).
 export const REDACT = !/^(0|off|false|no)$/i.test(process.env.BROWSA_MCP_REDACT ?? "");

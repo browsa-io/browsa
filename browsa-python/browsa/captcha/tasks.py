@@ -29,15 +29,16 @@ GEETEST_SLIDE = "GeeTestSlide"
 ROTATE = "RotateTask"              # refused by the service until measured through it (2026-11-21)
 CLICK_ORDER = "ClickOrderTask"     # refused by the service until measured through it (2026-11-21)
 ALTCHA = "AltchaTask"              # refused by the service until measured through it (2026-11-21)
-TEXT_QUESTION = "TextCaptchaTask"  # these four: refused by the service until switched on (2026-11-21)
+TEXT_QUESTION = "TextCaptchaTask"
 BOUNDING_BOX = "BoundingBoxTask"
-DRAW_AROUND = "DrawAroundTask"
+DRAW_AROUND = "DrawAroundTask"     # refused by the service until switched on (2026-11-21)
 DRAG_DROP = "DragDropTask"
 CLOUDFLARE_CHALLENGE = "AntiCloudflareTask"
 
 # The live list, with parameters, prices and measured numbers: CaptchaClient.list_types()
 # (GET https://captcha.browsa.io/types).
-RECOGNITION_TYPES = (IMAGE_TO_TEXT, RECAPTCHA_V2_CLASSIFICATION, AWS_WAF_CLASSIFICATION, VISION_ENGINE, GEETEST_SLIDE)
+RECOGNITION_TYPES = (IMAGE_TO_TEXT, RECAPTCHA_V2_CLASSIFICATION, AWS_WAF_CLASSIFICATION, VISION_ENGINE, GEETEST_SLIDE,
+                     TEXT_QUESTION, BOUNDING_BOX, DRAG_DROP)
 TOKEN_TYPES = (
     "ReCaptchaV2TaskProxyLess", "ReCaptchaV2Task",
     "ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTask",
@@ -258,6 +259,45 @@ def geetest_slide_v4(image_background: Image, image_slice: Image, *, top: float,
     return task
 
 
+def text_question(question: str, *, website_url: Optional[str] = None) -> Task:
+    """The answer to an anti-spam question asked in words ("If tomorrow is Saturday, what day is
+    today?"), up to 600 characters. No picture (``TextCaptchaTask``).
+    Solution: ``{"text": the answer to type, "alternatives": [other spellings]}``."""
+    if not question or not question.strip():
+        raise ValueError("question is required")
+    task: Task = {"type": TEXT_QUESTION, "comment": question}
+    if website_url:
+        task["websiteURL"] = website_url
+    return task
+
+
+def drag_drop(image_background: Image, pieces: Sequence[Image], *, website_url: Optional[str] = None) -> Task:
+    """Where each piece goes in the background picture (``DragDropTask``): 1 to 6 piece pictures,
+    in order. You do the dragging. Solution: ``{"coordinates": [{"x", "y"} or None, ...]`` (the
+    top-left of each piece's place), ``"centers": [...]}``, same order as ``pieces``."""
+    if isinstance(pieces, (bytes, bytearray, str)) or not 1 <= len(pieces) <= 6:
+        raise ValueError("pieces must be a list of 1 to 6 pictures")
+    task: Task = {"type": DRAG_DROP, "body": _b64(image_background), "pieces": [_b64(p) for p in pieces]}
+    if website_url:
+        task["websiteURL"] = website_url
+    return task
+
+
+def bounding_box(image: Image, instruction: str, *, many: bool = False,
+                 website_url: Optional[str] = None) -> Task:
+    """A tight box around what ``instruction`` names, in the picture's pixels (``BoundingBoxTask``).
+    ``many``: every matching thing instead of one.
+    Solution: ``{"bounding_boxes": [{"xMin", "yMin", "xMax", "yMax"}, ...]}``."""
+    if not instruction or not instruction.strip():
+        raise ValueError("instruction is required")
+    task: Task = {"type": BOUNDING_BOX, "body": _b64(image), "comment": instruction}
+    if many:
+        task["many"] = True
+    if website_url:
+        task["websiteURL"] = website_url
+    return task
+
+
 def cloudflare_challenge(website_url: str, proxy: ProxyArg, *, user_agent: Optional[str] = None) -> Task:
     """Pass a page's Cloudflare full-page check through your proxy (required: the cookie only works
     from the address that passed). Solution: ``{"cookies": {"cf_clearance": ...}, "token", "userAgent"}``."""
@@ -297,9 +337,25 @@ class GridSolution(TypedDict, total=False):
     hasObject: bool
 
 
+class TextQuestionSolution(TypedDict, total=False):
+    text: str
+    alternatives: List[str]
+
+
+class DragDropSolution(TypedDict, total=False):
+    coordinates: List[Optional[Dict[str, float]]]
+    centers: List[Optional[Dict[str, float]]]
+
+
+class BoundingBoxSolution(TypedDict, total=False):
+    bounding_boxes: List[Dict[str, float]]
+
+
 __all__ = [
     "Task", "TASK_TYPES", "RECOGNITION_TYPES", "TOKEN_TYPES", "normalize_task", "proxy_string",
     "image_to_text", "recaptcha_v2", "recaptcha_v3", "turnstile", "recaptcha_v2_classification",
     "aws_waf_classification", "slider", "geetest_slide_v3", "geetest_slide_v4", "cloudflare_challenge",
+    "text_question", "drag_drop", "bounding_box",
     "TokenSolution", "TurnstileSolution", "TextSolution", "GridSolution",
+    "TextQuestionSolution", "DragDropSolution", "BoundingBoxSolution",
 ]

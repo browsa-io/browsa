@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+Published on npm: **0.1.2** (`npm view n8n-nodes-browsa version`). 0.2.0 below is in this repository and not on npm yet.
+
+## 0.2.0 (unreleased: not on npm)
 
 - **Robot** resource: Run (a robot from a list or by ID, on its saved inputs or on rows given as JSON; waits for the run or returns at once; one item for the run or one item per row) and Get Run.
 - **Recipe** resource: Run (a recipe with JSON parameters, waits with the server's long poll) and Get Run.

@@ -8,13 +8,13 @@
     "subfolder": "browsa-mcp"
   },
   "websiteUrl": "https://browsa.io",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@browsa/mcp",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

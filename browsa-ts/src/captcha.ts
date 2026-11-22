@@ -1,5 +1,5 @@
 /**
- * Browsa's captcha-solving API: createTask, getTaskResult, getBalance, in the
+ * Browsa's captcha-solving API: createTask, getTaskResult, getBalance, reports and callbacks, in the
  * format CapSolver, Anti-Captcha, CapMonster and 2Captcha's v2 API share.
  * Same key and credits as the browser API.
  *
@@ -82,6 +82,12 @@ export interface AwsWafSolution { objects: number[] }
 export interface SliderSolution { distance: number }
 export interface GeeTestSlideSolution { distance: number; x: number }
 export interface CloudflareSolution { cookies: Record<string, string>; token: string; type?: "challenge"; userAgent?: string }
+/** TextCaptchaTask: the answer to type, and other spellings of it. */
+export interface TextQuestionSolution { text: string; alternatives?: string[] }
+/** DragDropTask: one place per piece, in the order the pieces were sent (null when a piece has no place). */
+export interface DragDropSolution { coordinates: ({ x: number; y: number } | null)[]; centers: ({ x: number; y: number } | null)[] }
+/** BoundingBoxTask: boxes in the picture's pixels. */
+export interface BoundingBoxSolution { bounding_boxes: { xMin: number; yMin: number; xMax: number; yMax: number }[] }
 
 /** What a solve cost, as the API states it. */
 export interface CaptchaCost { charged: boolean; amount: number; unit: "credits" | "usd"; credits?: number; refunded?: number; note?: string }
@@ -260,6 +266,28 @@ export const captchaTasks = {
     if (opts.sliceCssWidth != null) t.sliceCssWidth = opts.sliceCssWidth;
     return t as CaptchaTask<GeeTestSlideSolution>;
   },
+  /** The answer to an anti-spam question asked in words (TextCaptchaTask), up to 600 characters. No picture. */
+  textQuestion(question: string, opts: { websiteURL?: string } = {}): CaptchaTask<TextQuestionSolution> {
+    if (!question || !question.trim()) throw new TypeError("question is required");
+    const t: Record<string, unknown> = { type: "TextCaptchaTask", comment: question };
+    if (opts.websiteURL) t.websiteURL = opts.websiteURL;
+    return t as CaptchaTask<TextQuestionSolution>;
+  },
+  /** Where each piece goes in the background picture (DragDropTask): 1 to 6 piece pictures, in order. You do the dragging. */
+  dragDrop(imageBackground: ImageInput, pieces: ImageInput[], opts: { websiteURL?: string } = {}): CaptchaTask<DragDropSolution> {
+    if (!Array.isArray(pieces) || pieces.length < 1 || pieces.length > 6) throw new TypeError("pieces must be an array of 1 to 6 pictures");
+    const t: Record<string, unknown> = { type: "DragDropTask", body: b64(imageBackground), pieces: pieces.map(b64) };
+    if (opts.websiteURL) t.websiteURL = opts.websiteURL;
+    return t as CaptchaTask<DragDropSolution>;
+  },
+  /** A tight box around what `instruction` names, in the picture's pixels (BoundingBoxTask). `many`: every matching thing. */
+  boundingBox(image: ImageInput, instruction: string, opts: { many?: boolean; websiteURL?: string } = {}): CaptchaTask<BoundingBoxSolution> {
+    if (!instruction || !instruction.trim()) throw new TypeError("instruction is required");
+    const t: Record<string, unknown> = { type: "BoundingBoxTask", body: b64(image), comment: instruction };
+    if (opts.many) t.many = true;
+    if (opts.websiteURL) t.websiteURL = opts.websiteURL;
+    return t as CaptchaTask<BoundingBoxSolution>;
+  },
   /** Pass a page's Cloudflare full-page check through your proxy (required: the cookie only works from the address that passed). */
   cloudflareChallenge(websiteURL: string, proxy: CaptchaProxy, opts: { userAgent?: string } = {}): CaptchaTask<CloudflareSolution> {
     const p = captchaProxyString(proxy);
@@ -317,7 +345,7 @@ export class CaptchaClient {
 
   constructor(opts: CaptchaClientOptions = {}) {
     const key = opts.apiKey || env("BROWSA_API_KEY");
-    if (!key) throw new TypeError("apiKey is required (or set BROWSA_API_KEY)");
+    if (!key) throw new TypeError("apiKey is required: pass apiKey or set BROWSA_API_KEY. Create a key at https://app.browsa.io/dashboard/keys");
     this.apiKey = key;
     this.baseUrl = (opts.baseUrl || env("BROWSA_CAPTCHA_URL") || DEFAULT_CAPTCHA_URL).replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT;
@@ -363,11 +391,23 @@ export class CaptchaClient {
    * {taskId, status: "ready", solution} for recognition, {taskId} for tokens.
    * `waitSeconds`: hold the call until a token task ends or the wait runs out (then status is
    * "ready" with the solution, or "processing").
+   *
+   * `callbackUrl`: the API also POSTs the finished answer (the JSON getTaskResult gives) to this
+   * public https URL, signed. The receiver has three jobs:
+   * 1. Once per host, the API first POSTs {"type": "callback.verify", "challenge": "..."} and the
+   *    endpoint must answer 2xx with JSON {"challenge": "<the same value>"}. Until it has,
+   *    createTask throws ERROR_INVALID_CALLBACK_URL (no task, no charge).
+   * 2. Check every delivery: verifySignature(rawBody, headers["x-browsa-signature"],
+   *    await cap.callbackSecret()) from "browsa/webhooks".
+   * 3. De-duplicate on the body's taskId: a delivery can arrive more than once.
+   * One host receives at most 60 requests a minute. The result stays in getTaskResult for
+   * 10 minutes whether or not the callback arrives.
    */
-  createTask(task: CaptchaTask<any> | Record<string, unknown>, opts: { waitSeconds?: number } = {}): Promise<CaptchaAnswer> {
+  createTask(task: CaptchaTask<any> | Record<string, unknown>, opts: { waitSeconds?: number; callbackUrl?: string } = {}): Promise<CaptchaAnswer> {
     const t = this.normalize ? normalizeCaptchaTask(task as Record<string, unknown>) : { ...task };
     const payload: Record<string, unknown> = { task: t };
     if (opts.waitSeconds) payload.waitSeconds = opts.waitSeconds;
+    if (opts.callbackUrl) payload.callbackUrl = opts.callbackUrl;
     return this.call("createTask", payload);
   }
 
@@ -378,7 +418,8 @@ export class CaptchaClient {
   }
 
   /** Tell the API whether the site took the solution. One report per task, within 15 minutes of the
-   * solve. Reports are recorded and used to improve solving. Throws CaptchaError (ERROR_ALREADY_REPORTED,
+   * solve. An incorrect report refunds that solve once, within the workspace's report limits:
+   * `refunded` in the answer says whether a refund was made. Throws CaptchaError (ERROR_ALREADY_REPORTED,
    * ERROR_REPORT_TOO_LATE, ERROR_REPORT_LIMIT). */
   async report(taskId: string, correct: boolean): Promise<CaptchaReport> {
     return (await this.call(correct ? "reportCorrect" : "reportIncorrect", { taskId })) as unknown as CaptchaReport;
@@ -392,6 +433,18 @@ export class CaptchaClient {
     return (r.types as CaptchaTypeInfo[]) ?? [];
   }
 
+  /** The secret this account's callbacks are signed with, as hex (made on first use).
+   * Pass it to `verifySignature` from "browsa/webhooks" as it is. */
+  async callbackSecret(): Promise<string> {
+    return String((await this.call("getCallbackSecret")).secret ?? "");
+  }
+
+  /** Replace the callback secret and return the new one. Deliveries are signed with the new
+   * secret from then on, so update the receiver at the same time. */
+  async rotateCallbackSecret(): Promise<string> {
+    return String((await this.call("rotateCallbackSecret")).secret ?? "");
+  }
+
   /** Balance: credits with a Browsa key. */
   async getBalance(): Promise<number> {
     return Number((await this.call("getBalance")).balance ?? 0);
@@ -401,13 +454,14 @@ export class CaptchaClient {
    * Create the task and wait for its solution. It does not poll on a timer: each call asks the
    * API to hold until the task ends (waitSeconds), so the answer arrives when it exists. Against a
    * server that does not hold calls it polls every pollIntervalMs.
+   * `callbackUrl`: the API also POSTs the answer there (see createTask).
    */
   async solve<S = Record<string, unknown>>(task: CaptchaTask<S> | Record<string, unknown>,
-    opts: { timeoutMs?: number; pollIntervalMs?: number } = {}): Promise<Solved<S>> {
+    opts: { timeoutMs?: number; pollIntervalMs?: number; callbackUrl?: string } = {}): Promise<Solved<S>> {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_SOLVE_TIMEOUT;
     const deadline = Date.now() + timeoutMs;
     const firstWait = Math.min(this.waitSeconds, timeoutMs / 1000);
-    const created = await this.createTask(task, { waitSeconds: firstWait || undefined });
+    const created = await this.createTask(task, { waitSeconds: firstWait || undefined, callbackUrl: opts.callbackUrl });
     const taskId = String(created.taskId ?? "");
     if (created.status === "ready" && created.solution) return withId<S>(created, taskId);
     if (!taskId) throw new CaptchaError("createTask returned no taskId", { code: "ERROR_NO_TASK_ID", body: created });
@@ -471,7 +525,8 @@ export class TwoCaptchaSolver {
 
   /** The site took the answer (same call as the library's goodReport). */
   goodReport(id: string): Promise<CaptchaReport> { return this.cap.reportCorrect(id); }
-  /** The site refused the answer (same call as the library's badReport): recorded. */
+  /** The site refused the answer (same call as the library's badReport): that solve is refunded once,
+   * within the workspace's report limits (`refunded` in the answer). */
   badReport(id: string): Promise<CaptchaReport> { return this.cap.reportIncorrect(id); }
 
   async recaptcha(params: {

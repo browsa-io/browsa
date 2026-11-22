@@ -112,7 +112,8 @@ class TwoCaptcha:
 
     def report(self, id_: str, correct: bool) -> Dict[str, Any]:
         """Tell Browsa whether the site took the answer (same call as the library's ``report``).
-        One report per task, within 15 minutes of the solve; reports are recorded and used to improve solving."""
+        One report per task, within 15 minutes of the solve. An incorrect report refunds that solve
+        once, within the workspace's report limits (``refunded`` in the answer)."""
         return self._client.report(id_, bool(correct))
 
 

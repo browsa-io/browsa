@@ -1,0 +1,33 @@
+name: Feature request
+description: Something an SDK, the MCP server or an integration should do
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - browsa (Python)
+        - browsa (TypeScript / CLI)
+        - "@browsa/mcp"
+        - langchain-browsa
+        - crewai-browsa
+        - n8n-nodes-browsa
+        - a new integration
+        - examples or docs
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The job, not the solution. What do you do today instead?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: A method name, an option or a snippet of how you would like to call it, if you have one in mind.
+    validations:
+      required: false

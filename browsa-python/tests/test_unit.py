@@ -137,6 +137,31 @@ def test_job_status_terminal():
 # ─── Client init validation ──────────────────────────────────────────────
 
 
+def test_client_reads_the_key_from_the_environment(monkeypatch):
+    from browsa import AsyncClient, Client
+    monkeypatch.setenv("BROWSA_API_KEY", "agt_live_from_env")
+    assert Client()._t.api_key == "agt_live_from_env"
+    assert AsyncClient()._sync._t.api_key == "agt_live_from_env"
+    assert Client(api_key="agt_live_given")._t.api_key == "agt_live_given"   # the argument wins
+    monkeypatch.delenv("BROWSA_BASE_URL", raising=False)
+    assert Client()._t.base_url == "https://browsa.io"
+    monkeypatch.setenv("BROWSA_BASE_URL", "http://127.0.0.1:9/")
+    assert Client()._t.base_url == "http://127.0.0.1:9"
+    assert Client(base_url="https://staging.example")._t.base_url == "https://staging.example"
+
+
+def test_client_without_a_key_says_what_to_do(monkeypatch):
+    from browsa import AsyncClient, Client
+    monkeypatch.delenv("BROWSA_API_KEY", raising=False)
+    for make in (Client, AsyncClient, lambda: Client(api_key="")):
+        with pytest.raises(ValueError) as e:
+            make()
+        assert str(e.value) == ("api_key is required: pass api_key or set BROWSA_API_KEY. "
+                                "Create a key at https://app.browsa.io/dashboard/keys")
+    with pytest.raises(ValueError, match="must start with 'agt_'. Create a key at https://app.browsa.io/dashboard/keys"):
+        Client(api_key="sk-fake")
+
+
 def test_client_requires_agt_prefix():
     from browsa import Client
     with pytest.raises(ValueError, match="agt_"):

@@ -146,14 +146,83 @@ test("listTypes is a GET that sends no key", async () => {
   assert.deepEqual(api.calls.at(-1), { method: "GET", path: "/types", body: {} });
 });
 
-test("no callback surface in this release; the webhooks verifier takes a hex secret", async () => {
+// The service's signature (services/captcha-api README): key = the secret's bytes from hex, message = "<t>.<raw body>".
+const sign = (raw, secretHex, t) => `t=${t}, v1=${createHmac("sha256", Buffer.from(secretHex, "hex")).update(`${t}.${raw}`).digest("hex")}`;
+
+test("callbackUrl is sent on createTask and solve, and only when given", async () => {
   const cap = client();
-  assert.equal(typeof cap.callbackSecret, "undefined");
+  await cap.createTask(turnstile(), { callbackUrl: "https://hooks.example.com/c" });
+  assert.equal(api.calls.at(-1).body.callbackUrl, "https://hooks.example.com/c");
+  api.holdMs = 0;
+  api.calls.length = 0;
+  const sol = await cap.solve(turnstile(), { callbackUrl: "https://hooks.example.com/c" });
+  assert.equal(sol.token, "0.cf");
+  const created = api.calls.filter((c) => c.path === "/createTask");
+  assert.equal(created.length, 1);
+  assert.equal(created[0].body.callbackUrl, "https://hooks.example.com/c");
+  assert.ok(api.calls.filter((c) => c.path === "/getTaskResult").every((c) => !("callbackUrl" in c.body)));
+});
+
+test("callbackSecret, rotateCallbackSecret, and the webhooks verifier takes the hex secret", async () => {
+  const cap = client();
+  const secret = await cap.callbackSecret();
+  assert.equal(secret, SECRET);
+  assert.deepEqual([api.calls.at(-1).path, api.calls.at(-1).body], ["/getCallbackSecret", { clientKey: KEY }]);
   const raw = '{"taskId":"t-1","status":"ready"}';
   const t = Math.floor(Date.now() / 1000);
-  const header = `t=${t}, v1=${createHmac("sha256", Buffer.from(SECRET, "hex")).update(`${t}.${raw}`).digest("hex")}`;
-  assert.equal(await verifySignature(raw, header, SECRET), true);
-  assert.equal(await verifySignature(raw + " ", header, SECRET), false);
+  const header = sign(raw, secret, t);
+  assert.equal(verifySignature(raw, header, secret), true);
+  assert.equal(verifySignature(Buffer.from(raw), header, secret), true);
+  assert.equal(verifySignature(raw + " ", header, secret), false);            // body changed
+  assert.equal(verifySignature(raw, sign(raw, secret, t - 301), secret), false); // older than 5 minutes
+  const rotated = await cap.rotateCallbackSecret();
+  assert.equal(rotated, "cd".repeat(32));
+  assert.equal(api.calls.at(-1).path, "/rotateCallbackSecret");
+  assert.equal(verifySignature(raw, header, rotated), false);                 // signed with the old one
+});
+
+test("a receiver echoes the challenge once per host and drops a repeat", () => {
+  const seen = new Set();
+  const handle = (raw, header) => {
+    if (!verifySignature(raw, header ?? "", SECRET)) return [401, "bad signature"];
+    const msg = JSON.parse(raw);
+    if (msg.type === "callback.verify") return [200, JSON.stringify({ challenge: msg.challenge })];
+    if (seen.has(msg.taskId)) return [200, "duplicate"];
+    seen.add(msg.taskId);
+    return [200, "ok"];
+  };
+  const t = Math.floor(Date.now() / 1000);
+  const verify = JSON.stringify({ type: "callback.verify", challenge: "c-123" });
+  assert.deepEqual(handle(verify, sign(verify, SECRET, t)), [200, '{"challenge":"c-123"}']);
+  const done = JSON.stringify({ errorId: 0, taskId: "t-1", status: "ready", solution: { token: "x" } });
+  assert.deepEqual(handle(done, sign(done, SECRET, t)), [200, "ok"]);
+  assert.deepEqual(handle(done, sign(done, SECRET, t)), [200, "duplicate"]);
+  assert.equal(handle(done, sign(done, "ef".repeat(32), t))[0], 401);          // another account's secret
+  assert.equal(handle(done, undefined)[0], 401);
+});
+
+test("question, drag and box builders", () => {
+  assert.deepEqual(tasks.textQuestion("If tomorrow is Saturday, what day is today?", { websiteURL: "https://a.example/" }),
+    { type: "TextCaptchaTask", comment: "If tomorrow is Saturday, what day is today?", websiteURL: "https://a.example/" });
+  assert.deepEqual(tasks.dragDrop(new Uint8Array([98, 103]), ["cDE=", new Uint8Array([112, 50])]),
+    { type: "DragDropTask", body: "Ymc=", pieces: ["cDE=", "cDI="] });
+  assert.deepEqual(tasks.boundingBox("aW1n", "the red car", { many: true }),
+    { type: "BoundingBoxTask", body: "aW1n", comment: "the red car", many: true });
+  assert.equal("many" in tasks.boundingBox("aW1n", "the red car"), false);
+  assert.throws(() => tasks.textQuestion(" "), TypeError);
+  assert.throws(() => tasks.dragDrop("bg", []), TypeError);
+  assert.throws(() => tasks.dragDrop("bg", Array(7).fill("p")), TypeError);
+  assert.throws(() => tasks.boundingBox("aW1n", ""), TypeError);
+});
+
+test("a missing key says which variable to set and where to create a key", () => {
+  const saved = process.env.BROWSA_API_KEY;
+  delete process.env.BROWSA_API_KEY;
+  try {
+    assert.throws(() => new CaptchaClient(), /apiKey is required: pass apiKey or set BROWSA_API_KEY\. Create a key at https:\/\/app\.browsa\.io\/dashboard\/keys/);
+  } finally {
+    if (saved !== undefined) process.env.BROWSA_API_KEY = saved;
+  }
 });
 
 test("drop-in shim: goodReport and badReport", async () => {

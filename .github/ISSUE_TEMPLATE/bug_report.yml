@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in an SDK, the MCP server or an integration does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not paste an API key** (it starts with `agt_live_`), a webhook secret or a live link. For account or billing questions write to support@browsa.io; for a vulnerability see SECURITY.md.
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - browsa (Python)
+        - browsa (TypeScript / CLI)
+        - "@browsa/mcp"
+        - langchain-browsa
+        - crewai-browsa
+        - n8n-nodes-browsa
+        - capbench
+        - examples
+        - docs or README
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: "`pip show browsa`, `npm ls browsa`, `npx browsa --version` or `npx -y @browsa/mcp --version`"
+      placeholder: 0.7.1
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime and OS
+      placeholder: Python 3.12 on macOS 15, or Node 22 on Ubuntu 24.04; for MCP, the client and its version
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what you got. Include the error's `code` and `request_id` when there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest code that shows it
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: There is no API key, secret or live link in this report.
+          required: true
+        - label: I am on the latest published version, or I say above why not.
+          required: false

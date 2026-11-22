@@ -20,6 +20,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
     "Topic :: Internet :: WWW/HTTP :: Browsers",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -34,7 +36,7 @@ Homepage = "https://browsa.io"
 Documentation = "https://browsa.io/docs"
 Source = "https://github.com/browsa-io/browsa/tree/main/browsa-python"
 Issues = "https://github.com/browsa-io/browsa/issues"
-Changelog = "https://github.com/browsa-io/browsa/releases"
+Changelog = "https://github.com/browsa-io/browsa/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 include = ["browsa*"]

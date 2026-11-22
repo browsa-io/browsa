@@ -4,17 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langchain-browsa"
-version = "0.1.0"
+version = "0.1.1"
 description = "LangChain integration for Browsa: Phantom cloud browsers for AI agents (browsa.io)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
+# The table form and the classifier below are what PyPI's `license` field and sidebar read.
+# The SPDX string form (license = "MIT" with license-files) fills only License-Expression,
+# which left PyPI's `license` empty for 0.1.0. setuptools packs LICENSE by default.
+license = {text = "MIT"}
 authors = [{name = "Browsa", email = "support@browsa.io"}]
 keywords = ["langchain", "langgraph", "browsa", "browser-automation", "ai-agents", "web-scraping", "cloud-browser"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -44,6 +47,7 @@ Homepage = "https://browsa.io"
 Documentation = "https://browsa.io/docs"
 Source = "https://github.com/browsa-io/browsa/tree/main/integrations/langchain-browsa"
 Issues = "https://github.com/browsa-io/browsa/issues"
+Changelog = "https://github.com/browsa-io/browsa/blob/main/integrations/langchain-browsa/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 include = ["langchain_browsa*"]

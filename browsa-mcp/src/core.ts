@@ -206,7 +206,7 @@ export function explain(e: unknown, tool: string, browserId?: string): string {
     case code === "STALE":
       return next("the page changed; call observe and use the new ids");
     case e.status === 401 || code === "INVALID_API_KEY" || code === "MISSING_API_KEY":
-      return next(`BROWSA_API_KEY was refused; mint a key at ${KEYS_URL} and restart the server`);
+      return next(`BROWSA_API_KEY was refused; create a key at ${KEYS_URL} and restart the server`);
     case e.status === 402 || /CREDIT/.test(code):
       return next("not enough credits; top up at https://app.browsa.io/dashboard/billing");
     case e.status === 429:

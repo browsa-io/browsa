@@ -2,6 +2,11 @@
 
 [n8n](https://n8n.io/) community nodes for [Browsa](https://browsa.io), the cloud browser API for AI agents. Run a saved robot or recipe, describe a task in plain language and let an agent run it in a Phantom cloud browser, or scrape, extract, screenshot and crawl pages in one call. The **Browsa Trigger** node starts a workflow when a robot run ends, a robot alert fires, a recipe run ends or a task finishes. Phantom is Browsa's own browser.
 
+[![npm version](https://img.shields.io/npm/v/n8n-nodes-browsa.svg)](https://www.npmjs.com/package/n8n-nodes-browsa)
+[![CI](https://github.com/browsa-io/browsa/actions/workflows/n8n-nodes-browsa-ci.yml/badge.svg)](https://github.com/browsa-io/browsa/actions/workflows/n8n-nodes-browsa-ci.yml)
+
+> **Published and unreleased.** npm serves **0.1.2**: the **Browsa** node with the Task, Job and Page resources. The **Robot** and **Recipe** resources and the **Browsa Trigger** node described below are **0.2.0, in this repository and not on npm yet**; they are marked "0.2.0" where they appear. `npm i n8n-nodes-browsa` installs 0.1.2.
+
 - [Install](#install)
 - [Credentials](#credentials)
 - [Operations](#operations)
@@ -62,20 +67,22 @@ n8n sends the key in the `X-API-Key` header. Saving the credential tests it with
 
 ## Operations
 
-| Resource | Operation | Browsa endpoint |
-|---|---|---|
-| Robot | Run | `POST /v1/robots/{id}/run`, then `GET /v1/robot-runs/{id}` until it ends |
-| Robot | Get Run | `GET /v1/robot-runs/{id}` |
-| Recipe | Run | `POST /v1/recipes/{id}/run` with `wait`, then `GET /v1/recipe-runs/{id}` until it ends |
-| Recipe | Get Run | `GET /v1/recipe-runs/{id}` |
-| Task | Run | `POST /v1/tasks`, then `GET /v1/jobs/{id}` until it ends |
-| Job | Get | `GET /v1/jobs/{id}` |
-| Page | Scrape | `POST /v1/quick/scrape` |
-| Page | Extract Data | `POST /v1/quick/extract` |
-| Page | Take Screenshot | `POST /v1/quick/screenshot` |
-| Page | Crawl | `POST /v1/quick/crawl`, then `GET /v1/jobs/{id}` until it ends |
+| Resource | Operation | Browsa endpoint | In |
+|---|---|---|---|
+| Robot | Run | `POST /v1/robots/{id}/run`, then `GET /v1/robot-runs/{id}` until it ends | 0.2.0 (not on npm yet) |
+| Robot | Get Run | `GET /v1/robot-runs/{id}` | 0.2.0 (not on npm yet) |
+| Recipe | Run | `POST /v1/recipes/{id}/run` with `wait`, then `GET /v1/recipe-runs/{id}` until it ends | 0.2.0 (not on npm yet) |
+| Recipe | Get Run | `GET /v1/recipe-runs/{id}` | 0.2.0 (not on npm yet) |
+| Task | Run | `POST /v1/tasks`, then `GET /v1/jobs/{id}` until it ends | 0.1.2 (npm) |
+| Job | Get | `GET /v1/jobs/{id}` | 0.1.2 (npm) |
+| Page | Scrape | `POST /v1/quick/scrape` | 0.1.2 (npm) |
+| Page | Extract Data | `POST /v1/quick/extract` | 0.1.2 (npm) |
+| Page | Take Screenshot | `POST /v1/quick/screenshot` | 0.1.2 (npm) |
+| Page | Crawl | `POST /v1/quick/crawl`, then `GET /v1/jobs/{id}` until it ends | 0.1.2 (npm) |
 
 ### Robot > Run
+
+*0.2.0, not on npm yet.*
 
 Runs a [robot](https://browsa.io/guides/robots): a saved job made from a recipe, with a table of input rows. One run covers every row.
 
@@ -89,13 +96,19 @@ A robot run costs the recipe's credits per input row; failed rows are free.
 
 ### Robot > Get Run
 
+*0.2.0, not on npm yet.*
+
 Reads a robot run by ID, with the same Output, Wait and Simplify options.
 
 ### Recipe > Run
 
+*0.2.0, not on npm yet.*
+
 Replays a [recipe](https://browsa.io/guides/recipes) with new **Parameters** (a JSON object checked against the recipe's parameter schema, for example `{"query": "air fryer"}`). With **Wait for Result** on, the node asks Browsa to hold the answer up to 60 seconds and then polls until the run ends or the timeout passes. A run returns `status` (`ok`, `failed` or `cancelled`), `output`, `error_code` (`blocked`, `needs_login`, `site_changed`, `invalid_output`, `params_invalid`, `timeout`), `repaired`, `duration_ms` and `credits`. Failed runs are free.
 
 ### Recipe > Get Run
+
+*0.2.0, not on npm yet.*
 
 Reads a recipe run by ID, with optional waiting.
 
@@ -145,6 +158,8 @@ Follows links breadth first from a **Start URL** and scrapes each page. **Max Pa
 When Browsa answers with an error, the node shows its code (for example `INSUFFICIENT_CREDIT`, `TOO_MANY_REQUESTS`, `LLM_KEY_REQUIRED`), what to do, and the request ID to quote to support@browsa.io. With **Continue On Fail**, the item gets an `error` field instead. A workspace has 6 browser slots; when all are in use the API answers `429 TOO_MANY_REQUESTS` and charges nothing, so the node's **Retry On Fail** setting is a good fit.
 
 ## Browsa Trigger
+
+*0.2.0, not on npm yet.*
 
 Starts the workflow on Browsa events. Choose one or more **Events**:
 
@@ -213,9 +228,9 @@ npm test         # n8n-node build, then node --test test/*.test.js
 npm run dev      # n8n with this node at http://localhost:5678 (in a container from n8n 3.0: Docker or Podman)
 ```
 
-The unit tests mock n8n's request helper and the trigger's request and response objects; they do not call the Browsa API. The robots API (`/v1/robots`, `/v1/robot-runs`) and the `robot.*` and `task.needs_user` webhook events follow `docs/robots/ROBOTS.md`; check the field names against the live API before publishing 0.2.0.
+The unit tests mock n8n's request helper and the trigger's request and response objects; they do not call the Browsa API. The Robot and Recipe resources and the trigger's `robot.*` and `task.needs_user` events (0.2.0) are tested with mocked HTTP only; their field names are checked against the live API before 0.2.0 is published.
 
-Publishing goes through GitHub Actions with npm provenance (`.github/workflows/publish.yml`), as n8n requires for verified nodes. See [CONTRIBUTING_UPSTREAM.md](CONTRIBUTING_UPSTREAM.md).
+Publishing goes through GitHub Actions with npm provenance ([`n8n-nodes-browsa-publish.yml`](https://github.com/browsa-io/browsa/blob/main/.github/workflows/n8n-nodes-browsa-publish.yml), on a tag `n8n-nodes-browsa-v<version>`), as n8n requires for verified nodes. Changes: [CHANGELOG.md](https://github.com/browsa-io/browsa/blob/main/integrations/n8n-nodes-browsa/CHANGELOG.md).
 
 ## Resources
 

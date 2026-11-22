@@ -24,6 +24,7 @@
  * (then pipe to jq).
  */
 import { Client, BrowsaError, type Job, type Reasoning } from "./index.js";
+import { VERSION } from "./version.js";
 
 const HELP = `browsa: real browsers for AI agents
 
@@ -59,6 +60,7 @@ Global flags:
   --api-key <key>         Override $BROWSA_API_KEY for this call
   --base <url>            Override https://browsa.io
   --help                  This message
+  --version               Print the version (no key needed)
 `;
 
 interface ParsedArgs {
@@ -115,6 +117,10 @@ async function main() {
     console.log(HELP);
     return;
   }
+  if (argv.includes("--version") || argv[0] === "-v" || argv[0] === "-V" || argv[0] === "version") {
+    console.log(VERSION);
+    return;
+  }
 
   const args = parse(argv);
   const cmd = args.positional[0]!;
@@ -128,7 +134,7 @@ async function main() {
   }
 
   if (!apiKey) {
-    console.error("error: BROWSA_API_KEY not set. Mint one at https://app.browsa.io/dashboard/keys");
+    console.error("error: BROWSA_API_KEY is not set. Create a key at https://app.browsa.io/dashboard/keys");
     process.exit(2);
   }
 

@@ -14,7 +14,11 @@ lists, once with only what is required (`basic`) and once with every parameter (
    task ends, so there is no sleep between calls and the answer arrives the moment it exists.
 3. The answer says what the solve cost (`cost`) and how long it took (`solveSeconds`). A failed
    solve is free and says so.
-4. If the site then refuses the solution, `report(task_id, correct=False)` gives the price back.
+4. If the site then refuses the solution, `report(task_id, correct=False)` refunds that solve once,
+   within the workspace's report limits; the answer's `refunded` says whether a refund was made.
+5. Optional: `solve(task, callback_url="https://your-host/hook")` also has the API POST the answer to
+   your endpoint. The endpoint must echo the one-time `callback.verify` challenge, check
+   `X-Browsa-Signature` and de-duplicate on `taskId` (see the SDK README, "Callbacks").
 """
 from __future__ import annotations
 
@@ -44,7 +48,7 @@ def call(method: str, body: dict, api_key: str | None = None) -> dict:
     """POST /<method> with the key added. Returns the answer; raises CaptchaFailed on errorId 1."""
     key = api_key or os.environ.get("BROWSA_API_KEY")
     if not key:
-        sys.exit("Set BROWSA_API_KEY to your Browsa API key.")
+        sys.exit("Set BROWSA_API_KEY to your Browsa API key. Create a key at https://app.browsa.io/dashboard/keys")
     req = urllib.request.Request(f"{BASE_URL}/{method}", method="POST",
                                  data=json.dumps({"clientKey": key, **body}).encode(),
                                  headers={"Content-Type": "application/json", "User-Agent": "browsa-captcha-example"})
@@ -58,9 +62,12 @@ def call(method: str, body: dict, api_key: str | None = None) -> dict:
     return answer
 
 
-def solve(task: dict, api_key: str | None = None) -> dict:
-    """Create the task and return its finished answer: {"taskId", "solution", "cost", "solveSeconds"}."""
+def solve(task: dict, api_key: str | None = None, callback_url: str | None = None) -> dict:
+    """Create the task and return its finished answer: {"taskId", "solution", "cost", "solveSeconds"}.
+    `callback_url`: the API also POSTs the answer to that https URL, signed."""
     body = {"task": task, "waitSeconds": WAIT_SECONDS}
+    if callback_url:
+        body["callbackUrl"] = callback_url
     answer = call("createTask", body, api_key)
     deadline = time.monotonic() + GIVE_UP_AFTER
     while answer.get("status") != "ready":
@@ -75,8 +82,14 @@ def solve(task: dict, api_key: str | None = None) -> dict:
 
 def report(task_id: str, correct: bool, api_key: str | None = None) -> dict:
     """Tell the API whether the site took the solution. One report per task, within 15 minutes of the
-    solve. Reports are recorded and used to improve solving."""
+    solve. An incorrect report refunds that solve once, within the workspace's report limits: the
+    answer's `refunded` says whether a refund was made."""
     return call("reportCorrect" if correct else "reportIncorrect", {"taskId": task_id}, api_key)
+
+
+def callback_secret(api_key: str | None = None, rotate: bool = False) -> str:
+    """The hex secret this account's callbacks are signed with; `rotate` replaces it."""
+    return call("rotateCallbackSecret" if rotate else "getCallbackSecret", {}, api_key)["secret"]
 
 
 def b64file(path: str) -> str:

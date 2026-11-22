@@ -142,6 +142,26 @@ test("models lists the hosted tiers and own-key providers", async () => {
   });
 });
 
+test("--version prints the package version and needs no key", async () => {
+  const env = { ...process.env };
+  delete env.BROWSA_API_KEY;
+  const { version } = JSON.parse(await (await import("node:fs/promises")).readFile(new URL("../package.json", import.meta.url), "utf-8"));
+  for (const flag of ["--version", "-v", "version"]) {
+    const { stdout } = await run("node", ["dist/cli.js", flag], { env });
+    assert.equal(stdout.trim(), version);
+  }
+});
+
+test("a missing key names the variable and where to create a key", async () => {
+  const env = { ...process.env };
+  delete env.BROWSA_API_KEY;
+  await assert.rejects(run("node", ["dist/cli.js", "credits"], { env }), (e) => {
+    assert.equal(e.code, 2);
+    assert.match(e.stderr, /BROWSA_API_KEY is not set\. Create a key at https:\/\/app\.browsa\.io\/dashboard\/keys/);
+    return true;
+  });
+});
+
 test("help has no em dashes", async () => {
   const { stdout } = await run("node", ["dist/cli.js", "--help"]);
   assert.match(stdout, /^browsa: real browsers for AI agents/);

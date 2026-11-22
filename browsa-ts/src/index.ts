@@ -18,7 +18,9 @@
  */
 
 export interface ClientOptions {
-  apiKey: string;
+  /** An `agt_live_*` key. Default: process.env.BROWSA_API_KEY. Create a key at https://app.browsa.io/dashboard/keys */
+  apiKey?: string;
+  /** Another Browsa API (staging). Default: process.env.BROWSA_BASE_URL, else https://browsa.io */
   baseUrl?: string;
   /** Per-request timeout in milliseconds (default 30_000). */
   timeoutMs?: number;
@@ -587,6 +589,8 @@ export {
 export type {
   CaptchaClientOptions, CaptchaAnswer, CaptchaTask, CaptchaTaskType, RecognitionTaskType, TokenTaskType, CaptchaProxy,
   Solved, TokenSolution, TurnstileSolution, TextSolution, GridSolution, AwsWafSolution, SliderSolution, TwoCaptchaAnswer,
+  GeeTestSlideSolution, CloudflareSolution, TextQuestionSolution, DragDropSolution, BoundingBoxSolution,
+  CaptchaCost, CaptchaReport, CaptchaTypeInfo,
 } from "./captcha";
 import { BrowsaError, APIError, AuthError, RateLimitError, InvalidIDError, NotFoundError, TimeoutError } from "./errors";
 import type { ErrorEnvelope } from "./errors";
@@ -2058,6 +2062,8 @@ export class Secrets {
   }
 }
 
+const KEYS_URL = "https://app.browsa.io/dashboard/keys";
+
 export class Client {
   private apiKey: string;
   private baseUrl: string;
@@ -2072,12 +2078,17 @@ export class Client {
   /** Secrets: the workspace vault (list, get, create, update, delete, importEnv, usage, keypair). */
   readonly secrets: Secrets;
 
-  constructor(opts: ClientOptions) {
-    if (!opts.apiKey || !opts.apiKey.startsWith("agt_")) {
-      throw new Error("apiKey must start with 'agt_'. Mint one at https://app.browsa.io/dashboard/keys");
+  constructor(opts: ClientOptions = {}) {
+    const key = (opts.apiKey || (typeof process !== "undefined" && process.env ? process.env.BROWSA_API_KEY : "") || "").trim();
+    if (!key) {
+      throw new Error(`apiKey is required: pass apiKey or set BROWSA_API_KEY. Create a key at ${KEYS_URL}`);
     }
-    this.apiKey = opts.apiKey;
-    this.baseUrl = (opts.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
+    if (!key.startsWith("agt_")) {
+      throw new Error(`apiKey must start with 'agt_'. Create a key at ${KEYS_URL}`);
+    }
+    this.apiKey = key;
+    const envBase = typeof process !== "undefined" && process.env ? process.env.BROWSA_BASE_URL : undefined;
+    this.baseUrl = (opts.baseUrl || envBase || DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT;
     this.fetchImpl = opts.fetch || globalThis.fetch;
     if (!this.fetchImpl) {

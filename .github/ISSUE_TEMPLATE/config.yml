@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Account, billing or a question about the service
+    url: mailto:support@browsa.io
+    about: Email support@browsa.io. Issues here are for the code in this repository.
+  - name: Report a vulnerability
+    url: https://github.com/browsa-io/browsa/blob/main/SECURITY.md
+    about: Write to security@browsa.io. Please do not open a public issue.
+  - name: API documentation
+    url: https://browsa.io/docs
+    about: Endpoints, errors, limits and guides.

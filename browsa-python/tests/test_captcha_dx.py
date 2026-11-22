@@ -181,16 +181,67 @@ def test_list_types_needs_no_key_in_the_request(api):
     assert (method, path, body) == ("GET", "/types", {})
 
 
-def test_no_callback_surface_and_the_webhooks_verifier_takes_a_hex_secret(api):
-    cap = client(api)
-    assert not hasattr(cap, "callback_secret")
+def _sign(raw: bytes, secret_hex: str, t: int) -> str:
+    """The service's signature (services/captcha-api README): key = the secret's bytes from hex,
+    message = "<t>.<raw body>"."""
     import hashlib
     import hmac
+    return f"t={t}, v1=" + hmac.new(bytes.fromhex(secret_hex), f"{t}.".encode() + raw, hashlib.sha256).hexdigest()
+
+
+def test_callback_url_is_sent_on_create_and_solve_and_only_when_given(api):
+    cap = client(api)
+    cap.create_task(tasks.turnstile("https://a.example", "0x4"), callback_url="https://hooks.example.com/c")
+    assert api.calls[-1][2]["callbackUrl"] == "https://hooks.example.com/c"
+    cap.create_task(tasks.turnstile("https://a.example", "0x4"))
+    assert "callbackUrl" not in api.calls[-1][2]
+    api.hold = 0
+    api.calls.clear()
+    sol = cap.solve(tasks.turnstile("https://a.example", "0x4"), callback_url="https://hooks.example.com/c")
+    assert sol["token"] == "0.cf"
+    created = [c for c in api.calls if c[1] == "/createTask"]
+    assert len(created) == 1 and created[0][2]["callbackUrl"] == "https://hooks.example.com/c"
+    assert all("callbackUrl" not in c[2] for c in api.calls if c[1] == "/getTaskResult")
+
+
+def test_callback_secret_and_rotate_and_the_verifier_takes_the_hex_secret(api):
+    cap = client(api)
+    secret = cap.callback_secret()
+    assert secret == SECRET and api.calls[-1][1:] == ("/getCallbackSecret", {"clientKey": KEY})
     raw = b'{"taskId":"t-1","status":"ready"}'
     t = int(time.time())
-    header = f"t={t}, v1=" + hmac.new(bytes.fromhex(SECRET), f"{t}.".encode() + raw, hashlib.sha256).hexdigest()
-    assert webhooks.verify_signature(raw, header, SECRET)
-    assert not webhooks.verify_signature(raw + b" ", header, SECRET)
+    header = _sign(raw, secret, t)
+    assert webhooks.verify_signature(raw, header, secret)
+    assert not webhooks.verify_signature(raw + b" ", header, secret)                 # body changed
+    assert not webhooks.verify_signature(raw, _sign(raw, secret, t - 301), secret)   # older than 5 minutes
+    new = cap.rotate_callback_secret()
+    assert new == "cd" * 32 and api.calls[-1][1] == "/rotateCallbackSecret"
+    assert not webhooks.verify_signature(raw, header, new)                           # signed with the old one
+
+
+def test_a_receiver_echoes_the_challenge_and_drops_a_repeat(api):
+    """The three jobs of a callback endpoint, as the README shows them."""
+    secret, seen = SECRET, set()
+
+    def handle(raw, headers):
+        if not webhooks.verify_signature(raw, headers.get("X-Browsa-Signature", ""), secret):
+            return 401, "bad signature"
+        msg = json.loads(raw)
+        if msg.get("type") == "callback.verify":
+            return 200, json.dumps({"challenge": msg["challenge"]})
+        if msg["taskId"] in seen:
+            return 200, "duplicate"
+        seen.add(msg["taskId"])
+        return 200, "ok"
+
+    t = int(time.time())
+    verify = json.dumps({"type": "callback.verify", "challenge": "c-123"}).encode()
+    assert handle(verify, {"X-Browsa-Signature": _sign(verify, secret, t)}) == (200, '{"challenge": "c-123"}')
+    done = json.dumps({"errorId": 0, "taskId": "t-1", "status": "ready", "solution": {"token": "x"}}).encode()
+    assert handle(done, {"X-Browsa-Signature": _sign(done, secret, t)}) == (200, "ok")
+    assert handle(done, {"X-Browsa-Signature": _sign(done, secret, t)}) == (200, "duplicate")
+    assert handle(done, {"X-Browsa-Signature": _sign(done, "ef" * 32, t)})[0] == 401  # another account's secret
+    assert handle(done, {})[0] == 401
 
 
 def test_twocaptcha_shim_report(api):
@@ -206,9 +257,36 @@ def test_async_client(api):
             sol = await cap.solve(tasks.turnstile("https://a.example", "0x4"))
             rep = await cap.report_incorrect(sol.task_id)
             types = await cap.list_types()
-            return sol, rep, types
-    sol, rep, types = asyncio.run(go())
+            await cap.create_task(tasks.turnstile("https://a.example", "0x4"), callback_url="https://h.example.com/c")
+            sent = api.calls[-1][2].get("callbackUrl")
+            return sol, rep, types, sent, await cap.callback_secret(), await cap.rotate_callback_secret()
+    sol, rep, types, sent, secret, rotated = asyncio.run(go())
     assert sol.cost == COST and rep["outcome"] == "incorrect" and types
+    assert (sent, secret, rotated) == ("https://h.example.com/c", SECRET, "cd" * 32)
+
+
+def test_question_drag_and_box_builders():
+    q = tasks.text_question("If tomorrow is Saturday, what day is today?", website_url="https://a.example/")
+    assert q == {"type": "TextCaptchaTask", "comment": "If tomorrow is Saturday, what day is today?",
+                 "websiteURL": "https://a.example/"}
+    d = tasks.drag_drop(b"bg", [b"p1", "cDI="])
+    assert d == {"type": "DragDropTask", "body": "Ymc=", "pieces": ["cDE=", "cDI="]}
+    b = tasks.bounding_box("aW1n", "the red car", many=True)
+    assert b == {"type": "BoundingBoxTask", "body": "aW1n", "comment": "the red car", "many": True}
+    assert "many" not in tasks.bounding_box("aW1n", "the red car")
+    for bad in (lambda: tasks.text_question(" "), lambda: tasks.drag_drop("bg", []),
+                lambda: tasks.drag_drop("bg", ["p"] * 7), lambda: tasks.drag_drop("bg", "one-string"),
+                lambda: tasks.bounding_box("aW1n", "")):
+        with pytest.raises(ValueError):
+            bad()
+    assert {"TextCaptchaTask", "DragDropTask", "BoundingBoxTask"} <= set(tasks.TASK_TYPES)
+
+
+def test_missing_key_message_names_the_variable_and_where_to_create_a_key(monkeypatch):
+    monkeypatch.delenv("BROWSA_API_KEY", raising=False)
+    with pytest.raises(ValueError) as e:
+        CaptchaClient()
+    assert "BROWSA_API_KEY" in str(e.value) and "Create a key at https://app.browsa.io/dashboard/keys" in str(e.value)
 
 
 def test_new_builders_use_the_catalogue_names():

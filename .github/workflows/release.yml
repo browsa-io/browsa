@@ -1,0 +1,114 @@
+# Creates the GitHub Release for a package tag, with that version's section of
+# the changelog as its notes. The release is made with the workflow's own
+# token, so its author is github-actions[bot].
+#
+# sdks/export-public.sh copies this file to .github/workflows/release.yml at
+# the root of github.com/browsa-io/browsa.
+#
+# It runs three ways:
+#   1. Called by a publish workflow after npm accepted the package
+#      (browsa-ts-publish.yml, browsa-mcp-publish.yml, n8n-nodes-browsa-publish.yml).
+#   2. On a pushed tag of a package that is published by hand:
+#      browsa-python-v<version>, langchain-browsa-v<version>, crewai-browsa-v<version>.
+#      Push the tag after the upload to PyPI: the job waits for the version to
+#      show on the registry and fails if it never does.
+#   3. By hand (Actions > Release > Run workflow) for a version that was
+#      published before this workflow existed, or to rewrite a release's notes.
+#      Give `target` when the tag does not exist yet: the tag is then created
+#      at that commit by this workflow, which starts no other workflow.
+#
+# Tags and their changelogs are listed in .github/scripts/release-notes.mjs.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'browsa-python-v*.*.*'
+      - 'langchain-browsa-v*.*.*'
+      - 'crewai-browsa-v*.*.*'
+  workflow_call:
+    inputs:
+      tag:
+        description: The package tag, for example browsa-mcp-v0.8.1
+        required: true
+        type: string
+      target:
+        description: Commit to create the tag at, when the tag does not exist yet
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The package tag, for example browsa-mcp-v0.8.0
+        required: true
+        type: string
+      target:
+        description: Commit to create the tag at, when the tag does not exist yet (full SHA)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      TARGET: ${{ inputs.target }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Release notes from the changelog
+        id: notes
+        run: |
+          node .github/scripts/release-notes.mjs "$TAG" --json > release.json
+          node -e '
+            const r = require("./release.json");
+            require("fs").writeFileSync("notes.md", r.notes);
+            const out = ["title", "package", "registry", "version"].map((k) => `${k}=${r[k]}`).join("\n") + "\n";
+            require("fs").appendFileSync(process.env.GITHUB_OUTPUT, out);
+          '
+          cat notes.md
+
+      - name: The version is on the registry
+        env:
+          PACKAGE: ${{ steps.notes.outputs.package }}
+          REGISTRY: ${{ steps.notes.outputs.registry }}
+          VERSION: ${{ steps.notes.outputs.version }}
+        run: |
+          if [ "$REGISTRY" = "npm" ]; then
+            url="https://registry.npmjs.org/$(node -p 'encodeURIComponent(process.env.PACKAGE).replace("%40", "@")')/$VERSION"
+          else
+            url="https://pypi.org/pypi/$PACKAGE/$VERSION/json"
+          fi
+          # A registry can take a minute or two to show a new version.
+          for i in $(seq 1 20); do
+            if curl -fsS -o /dev/null "$url"; then echo "$PACKAGE $VERSION is published."; exit 0; fi
+            sleep 15
+          done
+          echo "::error title=Not published::$PACKAGE $VERSION is not on $REGISTRY. A release is made only for a published version: publish it, then re-run this job."
+          exit 1
+
+      - name: Create the release, or update its notes
+        env:
+          TITLE: ${{ steps.notes.outputs.title }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file notes.md
+          elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
+            gh release create "$TAG" --verify-tag --title "$TITLE" --notes-file notes.md
+          elif [ -n "$TARGET" ]; then
+            gh release create "$TAG" --target "$TARGET" --title "$TITLE" --notes-file notes.md
+          else
+            echo "::error title=No such tag::$TAG does not exist. Push it, or run this workflow by hand with the commit as target."
+            exit 1
+          fi
+          gh release view "$TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

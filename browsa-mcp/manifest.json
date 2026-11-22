@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "browsa",
   "display_name": "Browsa",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Cloud browsers for AI agents, and captcha solving for a browser of your own.",
   "long_description": "Browsa gives a model a real cloud browser (Phantom): it reads the page as compact text, acts with real input, types saved secrets it never sees, hands over to a person when a check needs one, and replays what it did with no model calls. For agents that drive their own browser, the captcha tools find the captcha in a page's HTML locally and return a solution with the step to apply it in that browser.",
   "author": {

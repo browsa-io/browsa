@@ -1,0 +1,167 @@
+# Builds and tests the packages in this repository on every push to main and
+# every pull request. No job needs a Browsa API key: the tests run against
+# local stand-ins of the API, and the live tests skip themselves when
+# BROWSA_API_KEY is not set (it never is here).
+#
+# sdks/export-public.sh copies this file to .github/workflows/ci.yml at the
+# root of github.com/browsa-io/browsa. The README badges point at this file
+# name, so do not rename it.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typescript:
+    name: browsa (TypeScript), Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22', '24']
+    defaults:
+      run:
+        working-directory: browsa-ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: browsa-ts/package-lock.json
+      - run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Typecheck
+        run: npx tsc --noEmit -p .
+      - name: Test
+        run: npm test
+      - name: Check the package contents
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e '
+            const files = require("./pack.json")[0].files.map((f) => f.path);
+            const need = ["dist/index.js", "dist/index.cjs", "dist/index.d.ts", "dist/webhooks.js", "dist/cli.js", "README.md", "LICENSE"];
+            const missing = need.filter((f) => !files.includes(f));
+            if (missing.length) { console.error("Missing from the package:", missing); process.exit(1); }
+            console.log("Package holds", files.length, "files.");
+          '
+          rm pack.json
+      - name: The CLI answers --version without a key
+        run: test "$(node dist/cli.js --version)" = "$(node -p "require('./package.json').version")"
+
+  python:
+    name: browsa (Python) ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
+    defaults:
+      run:
+        working-directory: browsa-python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest pytest-asyncio
+      - name: Test
+        run: python -m pytest -q
+      - name: Build the sdist and the wheel, check their metadata
+        if: matrix.python == '3.12'
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+
+  mcp:
+    name: "@browsa/mcp, Node ${{ matrix.node }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22', '24']
+    defaults:
+      run:
+        working-directory: browsa-mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: browsa-mcp/package-lock.json
+      - run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Typecheck
+        run: npx tsc --noEmit -p .
+      - name: Test (the server over stdio, against a local stand-in of the API)
+        run: npm test
+      - name: package.json, server.json and manifest.json carry one version
+        run: |
+          node -e '
+            const v = require("./package.json").version, s = require("./server.json"), m = require("./manifest.json");
+            const all = [s.version, ...s.packages.map((p) => p.version), m.version];
+            if (all.some((x) => x !== v)) { console.error("versions differ from", v, all); process.exit(1); }
+          '
+      - name: The server answers --version and --help without a key
+        run: |
+          test "$(node dist/server.js --version)" = "$(node -p "require('./package.json').version")"
+          node dist/server.js --help | grep -q "BROWSA_API_KEY"
+
+  examples:
+    name: examples (ten scripts against a local stand-in)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: browsa-ts/package-lock.json
+      - name: Install the Python SDK from this checkout
+        run: python -m pip install -e browsa-python pytest
+      - name: Build the TypeScript SDK from this checkout
+        working-directory: browsa-ts
+        run: npm ci && npm run build
+      - name: Link it into examples/
+        working-directory: examples
+        run: npm install --no-save ../browsa-ts typescript@5 @types/node@20
+      - name: Typecheck the TypeScript examples
+        working-directory: examples
+        run: npx tsc --noEmit -p .
+      - name: Run every example
+        working-directory: examples
+        run: python -m pytest -q tests
+
+  repo:
+    name: release scripts and repository files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Release helpers (notes for every package's current version)
+        run: node --test .github/scripts/test/scripts.test.mjs
+      - name: No personal names, no secrets, the browser is called Phantom
+        run: bash .github/scripts/check-repo.sh

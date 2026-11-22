@@ -1,0 +1,12 @@
+{
+  "name": "browsa-examples",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable examples for the Browsa SDKs",
+  "license": "MIT",
+  "scripts": {
+    "test": "python -m pytest -q tests",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

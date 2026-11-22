@@ -1,4 +1,4 @@
-"""Client for Browsa's captcha API: createTask, getTaskResult, getBalance, reports and the type catalogue.
+"""Client for Browsa's captcha API: createTask, getTaskResult, getBalance, reports, callbacks and the type catalogue.
 
 Every answer is HTTP 200 with ``errorId`` 0 (ok) or 1 (error, with ``errorCode``), the common
 format of captcha-solving APIs. Recognition tasks are answered inside createTask; token tasks
@@ -83,7 +83,9 @@ class CaptchaClient:
         cap = CaptchaClient()                       # BROWSA_API_KEY from the environment
         sol = cap.solve(tasks.turnstile("https://example.com", "0x4AAAA..."))
         print(sol["token"], sol.cost, sol.solve_seconds)
-        cap.report_correct(sol.task_id)             # the site took it: recorded
+        cap.report_correct(sol.task_id)             # the site took it
+        # cap.report_incorrect(sol.task_id)         # the site refused it: that solve is refunded once,
+        #                                           # within the workspace's report limits
 
     Args:
         api_key: your Browsa API key (the same key and credits as the browser API);
@@ -101,7 +103,8 @@ class CaptchaClient:
                  opener: Optional[Callable[..., Any]] = None) -> None:
         key = api_key or os.environ.get("BROWSA_API_KEY") or ""
         if not key:
-            raise ValueError("api_key is required (or set BROWSA_API_KEY)")
+            raise ValueError("api_key is required: pass api_key or set BROWSA_API_KEY. "
+                             "Create a key at https://app.browsa.io/dashboard/keys")
         self.api_key = key
         self.base_url = (base_url or os.environ.get("BROWSA_CAPTCHA_URL") or DEFAULT_CAPTCHA_URL).rstrip("/")
         self.timeout = timeout
@@ -140,14 +143,30 @@ class CaptchaClient:
             headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": USER_AGENT},
         ))
 
-    def create_task(self, task: Mapping[str, Any], *, wait_seconds: Optional[float] = None) -> Dict[str, Any]:
+    def create_task(self, task: Mapping[str, Any], *, wait_seconds: Optional[float] = None,
+                    callback_url: Optional[str] = None) -> Dict[str, Any]:
         """``{"taskId", "status": "ready", "solution"}`` for recognition, ``{"taskId"}`` for tokens.
 
         ``wait_seconds``: hold the call until a token task ends or the wait runs out; the answer is
-        then ``status`` ``ready`` with the solution, or ``processing``."""
+        then ``status`` ``ready`` with the solution, or ``processing``.
+
+        ``callback_url``: the API also POSTs the finished answer (the JSON ``get_task_result`` gives)
+        to this public ``https://`` URL, signed. The receiver has three jobs:
+
+        1. Once per host, the API first POSTs ``{"type": "callback.verify", "challenge": "..."}``
+           and the endpoint must answer 2xx with JSON ``{"challenge": "<the same value>"}``.
+           Until it has, ``create_task`` raises ``ERROR_INVALID_CALLBACK_URL`` (no task, no charge).
+        2. Check every delivery: ``browsa.webhooks.verify_signature(raw_body,
+           headers["X-Browsa-Signature"], cap.callback_secret())``.
+        3. De-duplicate on the body's ``taskId``: a delivery can arrive more than once.
+
+        One host receives at most 60 requests a minute. The result stays in ``get_task_result``
+        for 10 minutes whether or not the callback arrives."""
         payload: Dict[str, Any] = {"task": normalize_task(task) if self.normalize else dict(task)}
         if wait_seconds:
             payload["waitSeconds"] = wait_seconds
+        if callback_url:
+            payload["callbackUrl"] = callback_url
         return self.call("createTask", payload)
 
     def get_task_result(self, task_id: str, *, wait_seconds: Optional[float] = None) -> Dict[str, Any]:
@@ -166,8 +185,9 @@ class CaptchaClient:
 
     def report(self, task_id: str, correct: bool) -> Dict[str, Any]:
         """Tell the API whether the site took the solution. One report per task, within 15
-        minutes of the solve. Reports are recorded and used to improve solving. Returns the API's answer
-        (``outcome``, ``message``, ...);
+        minutes of the solve. An incorrect report refunds that solve once, within the workspace's
+        report limits: ``refunded`` in the answer says whether a refund was made. Returns the API's
+        answer (``outcome``, ``refunded``, ``message``, ...);
         raises CaptchaError (``ERROR_ALREADY_REPORTED``, ``ERROR_REPORT_TOO_LATE``, ``ERROR_REPORT_LIMIT``)."""
         return self.call("reportCorrect" if correct else "reportIncorrect", {"taskId": task_id})
 
@@ -177,7 +197,7 @@ class CaptchaClient:
     def report_incorrect(self, task_id: str) -> Dict[str, Any]:
         return self.report(task_id, False)
 
-    # ── catalogue ──────────────────────────────────────────────────────────
+    # ── catalogue and callbacks ──────────────────────────────────────────
 
     def list_types(self) -> List[Dict[str, Any]]:
         """Every task type the API accepts (no key needed): ``type``, ``status`` (``live`` / ``off``),
@@ -186,14 +206,25 @@ class CaptchaClient:
                                      headers={"Accept": "application/json", "User-Agent": USER_AGENT})
         return list(self._send(req).get("types") or [])
 
+    def callback_secret(self) -> str:
+        """The secret this account's callbacks are signed with, as hex (made on first use).
+        Pass it to ``browsa.webhooks.verify_signature`` as it is."""
+        return str(self.call("getCallbackSecret").get("secret") or "")
+
+    def rotate_callback_secret(self) -> str:
+        """Replace the callback secret and return the new one. Deliveries are signed with the
+        new secret from then on, so update the receiver at the same time."""
+        return str(self.call("rotateCallbackSecret").get("secret") or "")
+
     # ── create and wait ──────────────────────────────────────────────────
 
     def solve(self, task: Mapping[str, Any], *, timeout: float = DEFAULT_SOLVE_TIMEOUT,
-              poll_interval: Optional[float] = None) -> Solution:
-        """Create the task and wait for its solution."""
+              poll_interval: Optional[float] = None, callback_url: Optional[str] = None) -> Solution:
+        """Create the task and wait for its solution. ``callback_url``: the API also POSTs the
+        answer there (see ``create_task``)."""
         wait = _wait_for(self.wait_seconds, self.timeout)
         deadline = time.monotonic() + timeout
-        created = self.create_task(task, wait_seconds=min(wait, timeout) or None)
+        created = self.create_task(task, wait_seconds=min(wait, timeout) or None, callback_url=callback_url)
         tid = str(created.get("taskId") or "")
         if created.get("status") == "ready" and created.get("solution") is not None:
             return _solution(created, tid)
@@ -238,8 +269,10 @@ class AsyncCaptchaClient:
     async def __aexit__(self, *exc: Any) -> None:
         return None
 
-    async def create_task(self, task: Mapping[str, Any], *, wait_seconds: Optional[float] = None) -> Dict[str, Any]:
-        return await asyncio.to_thread(self._sync.create_task, task, wait_seconds=wait_seconds)
+    async def create_task(self, task: Mapping[str, Any], *, wait_seconds: Optional[float] = None,
+                          callback_url: Optional[str] = None) -> Dict[str, Any]:
+        return await asyncio.to_thread(self._sync.create_task, task, wait_seconds=wait_seconds,
+                                       callback_url=callback_url)
 
     async def get_task_result(self, task_id: str, *, wait_seconds: Optional[float] = None) -> Dict[str, Any]:
         return await asyncio.to_thread(self._sync.get_task_result, task_id, wait_seconds=wait_seconds)
@@ -259,12 +292,18 @@ class AsyncCaptchaClient:
     async def list_types(self) -> List[Dict[str, Any]]:
         return await asyncio.to_thread(self._sync.list_types)
 
+    async def callback_secret(self) -> str:
+        return await asyncio.to_thread(self._sync.callback_secret)
+
+    async def rotate_callback_secret(self) -> str:
+        return await asyncio.to_thread(self._sync.rotate_callback_secret)
+
     async def solve(self, task: Mapping[str, Any], *, timeout: float = DEFAULT_SOLVE_TIMEOUT,
-                    poll_interval: Optional[float] = None) -> Solution:
+                    poll_interval: Optional[float] = None, callback_url: Optional[str] = None) -> Solution:
         c = self._sync
         wait = _wait_for(c.wait_seconds, c.timeout)
         deadline = time.monotonic() + timeout
-        created = await self.create_task(task, wait_seconds=min(wait, timeout) or None)
+        created = await self.create_task(task, wait_seconds=min(wait, timeout) or None, callback_url=callback_url)
         tid = str(created.get("taskId") or "")
         if created.get("status") == "ready" and created.get("solution") is not None:
             return _solution(created, tid)

@@ -19,6 +19,42 @@ function mockFetch(handlers) {
 
 test("client requires agt_ prefix", () => {
   assert.throws(() => new Client({ apiKey: "sk-fake" }), /agt_/);
+  assert.throws(() => new Client({ apiKey: "sk-fake" }), /must start with 'agt_'\. Create a key at https:\/\/app\.browsa\.io\/dashboard\/keys/);
+});
+
+test("client reads BROWSA_API_KEY; without a key it says what to do", async () => {
+  const saved = process.env.BROWSA_API_KEY;
+  try {
+    process.env.BROWSA_API_KEY = "agt_live_from_env";
+    let sent = null;
+    const fetch = mockFetch({ "GET /v1/credits": async (_u, init) => { sent = init.headers["X-API-Key"]; return new Response(JSON.stringify({ balance: 1 }), { status: 200, headers: { "content-type": "application/json" } }); } });
+    await new Client({ fetch }).credits();
+    assert.equal(sent, "agt_live_from_env");
+    await new Client({ apiKey: "agt_live_given", fetch }).credits();   // the argument wins
+    assert.equal(sent, "agt_live_given");
+    let host = null;
+    const spy = async (url) => { host = new URL(url).host; return new Response("{}", { status: 200, headers: { "content-type": "application/json" } }); };
+    const savedBase = process.env.BROWSA_BASE_URL;
+    try {
+      process.env.BROWSA_BASE_URL = "http://127.0.0.1:9/";
+      await new Client({ fetch: spy }).credits();
+      assert.equal(host, "127.0.0.1:9");
+      await new Client({ fetch: spy, baseUrl: "https://staging.example" }).credits();   // the argument wins
+      assert.equal(host, "staging.example");
+      delete process.env.BROWSA_BASE_URL;
+      await new Client({ fetch: spy }).credits();
+      assert.equal(host, "browsa.io");
+    } finally {
+      if (savedBase === undefined) delete process.env.BROWSA_BASE_URL; else process.env.BROWSA_BASE_URL = savedBase;
+    }
+    delete process.env.BROWSA_API_KEY;
+    const want = "apiKey is required: pass apiKey or set BROWSA_API_KEY. Create a key at https://app.browsa.io/dashboard/keys";
+    assert.throws(() => new Client(), { message: want });
+    assert.throws(() => new Client({}), { message: want });
+    assert.throws(() => new Client({ apiKey: "" }), { message: want });
+  } finally {
+    if (saved === undefined) delete process.env.BROWSA_API_KEY; else process.env.BROWSA_API_KEY = saved;
+  }
 });
 
 test("createTask sends snake_case body", async () => {

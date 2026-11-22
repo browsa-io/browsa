@@ -31,33 +31,43 @@ import {
 
 import { refreshCatalogue } from "./captcha/catalogue.js";
 import { callCaptchaPage, CAPTCHA_PAGE_TOOLS, captchaPageTools, setReportToolListed } from "./captcha/tools.js";
-import { API_KEY, CORE_TOOLS, enabledExtras, GROUPS, KEYS_URL, NO_KEY_MESSAGE, NO_KEY_TOOLS, REDACT, VERSION } from "./config.js";
+import { annotate } from "./annotations.js";
+import {
+  API_KEY, cliFlag, CORE_TOOLS, enabledExtras, GROUPS, HELP, INSTRUCTIONS, KEYS_URL, NO_KEY_MESSAGE, NO_KEY_TOOLS, REDACT, VERSION,
+} from "./config.js";
 import { callCore, coreTools } from "./core.js";
 import { callLegacy, legacyTools } from "./legacy.js";
 import { getPrompt, listPrompts } from "./prompts.js";
 import { redactUrls } from "./redact.js";
 
+// --help and --version print and exit: nothing below starts, no key is needed.
+const FLAG = cliFlag();
+
 // Without a key the server still starts and lists its tools, so MCP clients and
 // directories can introspect it; every tool call then answers NO_KEY_MESSAGE.
-if (!API_KEY) {
+if (!FLAG && !API_KEY) {
   console.error("[browsa-mcp] BROWSA_API_KEY is not set: tools are listed, but calls that reach Browsa will fail until it is.");
-  console.error(`           Mint one at ${KEYS_URL}`);
+  console.error(`           Create a key at ${KEYS_URL}`);
 }
 
 const extras = enabledExtras();
-for (const w of extras.unknown) {
+for (const w of FLAG ? [] : extras.unknown) {
   console.error(`[browsa-mcp] BROWSA_MCP_TOOLS: unknown group or tool "${w}" (groups: ${Object.keys(GROUPS).join(", ")}, all)`);
 }
 
+// Every tool carries annotations (read-only / destructive hints): src/annotations.ts.
 const tools = [
   ...coreTools.filter((t) => extras.core.has(t.name)),
   ...captchaPageTools.filter((t) => extras.tools.has(t.name)),
   ...legacyTools.filter((t) => extras.tools.has(t.name)),
-];
+].map((t) => annotate(t));
 const listed = new Set<string>(tools.map((t) => t.name));
 setReportToolListed(listed.has("report_captcha_result"));
 
-const server = new Server({ name: "browsa", version: VERSION }, { capabilities: { tools: {}, prompts: {} } });
+const server = new Server(
+  { name: "browsa", title: "Browsa", version: VERSION },
+  { capabilities: { tools: {}, prompts: {} }, instructions: INSTRUCTIONS },
+);
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
@@ -111,7 +121,13 @@ async function main() {
   console.error(`[browsa-mcp] ${VERSION} ready (tools=${tools.length})`);
 }
 
-main().catch((e) => {
-  console.error("[browsa-mcp] fatal:", e);
-  process.exit(1);
-});
+if (FLAG === "version") {
+  console.log(VERSION);
+} else if (FLAG === "help") {
+  console.log(HELP);
+} else {
+  main().catch((e) => {
+    console.error("[browsa-mcp] fatal:", e);
+    process.exit(1);
+  });
+}

@@ -8,6 +8,7 @@ Real browsers for AI agents: the official TypeScript/JavaScript SDK for [browsa.
 
 [![npm version](https://img.shields.io/npm/v/browsa.svg)](https://www.npmjs.com/package/browsa)
 [![Node](https://img.shields.io/node/v/browsa.svg)](https://www.npmjs.com/package/browsa)
+[![CI](https://github.com/browsa-io/browsa/actions/workflows/ci.yml/badge.svg)](https://github.com/browsa-io/browsa/actions/workflows/ci.yml)
 
 ## Install
 
@@ -20,10 +21,12 @@ Zero deps. Pure Node 18+ fetch. Single ESM+CJS bundle. Audit-friendly.
 
 ## Five-line hello world
 
+You need a Browsa API key: create one at [app.browsa.io/dashboard/keys](https://app.browsa.io/dashboard/keys) and set it as `BROWSA_API_KEY`. New accounts get 100 free credits after email verification, no card.
+
 ```ts
 import { Client } from "browsa";
 
-const c = new Client({ apiKey: "agt_live_..." });
+const c = new Client();   // reads BROWSA_API_KEY; or new Client({ apiKey: "agt_live_..." })
 const job = await c.runTask({
   task: "Go to news.ycombinator.com and return the top story title.",
   llm: "browsa",
@@ -299,7 +302,7 @@ console.log(link.live_url);                         // opens once; make one per 
 
 ## Captcha solving
 
-`CaptchaClient` is a client for Browsa's captcha API: `createTask`, `getTaskResult` and `getBalance` in the format CapSolver, Anti-Captcha, CapMonster and 2Captcha's v2 API share. Same key and credits as the browser API. Failed and unsolvable tasks are not charged. Measured pass rates per type: <https://browsa.io/captcha>.
+`CaptchaClient` is a client for Browsa's captcha API: `createTask`, `getTaskResult` and `getBalance`, plus reports and callbacks, in the format CapSolver, Anti-Captcha, CapMonster and 2Captcha's v2 API share. Same key and credits as the browser API. Failed and unsolvable tasks are not charged. Measured pass rates per type: <https://browsa.io/captcha>.
 
 ```ts
 import { CaptchaClient, CaptchaError, captchaTasks as tasks } from "browsa";
@@ -330,7 +333,48 @@ for (const t of await cap.listTypes()) { // every type: status, parameters, pric
 }
 ```
 
-More builders: `geetestSlideV3`, `geetestSlideV4`, `cloudflareChallenge`. A failed solve is free; `CaptchaError` carries `fix` (what to change) and `charged`. Reports are recorded and used to improve solving.
+More builders: `geetestSlideV3`, `geetestSlideV4`, `cloudflareChallenge`, and the question, drag and box types:
+
+```ts
+const { text } = await cap.solve(tasks.textQuestion("If tomorrow is Saturday, what day is today?"));
+const { coordinates } = await cap.solve(tasks.dragDrop(background, [piece1, piece2]));   // one { x, y } per piece
+const { bounding_boxes } = await cap.solve(tasks.boundingBox(picture, "the red car"));   // { xMin, yMin, xMax, yMax }
+```
+
+A failed solve is free; `CaptchaError` carries `fix` (what to change) and `charged`. An incorrect report refunds that solve once, within the workspace's report limits: `refunded` in the answer says whether a refund was made.
+
+### Callbacks
+
+Pass `callbackUrl` and the API also POSTs the finished answer (the JSON `getTaskResult` gives) to your public `https://` endpoint. `getTaskResult` keeps working, and the result stays there for 10 minutes.
+
+```ts
+const sol = await cap.solve(tasks.turnstile("https://example.com", "0x4AAAA..."), { callbackUrl: "https://hooks.example.com/captcha" });
+const secret = await cap.callbackSecret();        // hex; cap.rotateCallbackSecret() replaces it
+```
+
+Your endpoint does three things:
+
+```ts
+import express from "express";
+import { verifySignature } from "browsa/webhooks";
+
+const seen = new Set<string>();
+app.post("/captcha", express.raw({ type: "application/json" }), (req, res) => {
+  if (!verifySignature(req.body, req.header("X-Browsa-Signature") ?? "", secret)) return res.sendStatus(401);
+  const msg = JSON.parse(req.body.toString("utf-8"));
+  if (msg.type === "callback.verify") return res.json({ challenge: msg.challenge });   // once per host
+  if (seen.has(msg.taskId)) return res.sendStatus(200);                                // a repeat
+  seen.add(msg.taskId);
+  // use msg.solution (or msg.errorCode), msg.cost, msg.solveSeconds
+  res.sendStatus(200);
+});
+```
+
+- **Host check, once per host.** Before the first callback to a host the API POSTs `{"type": "callback.verify", "challenge": "..."}`; answer 2xx with `{"challenge": "<the same value>"}` within 6 s. Until the host has answered, `createTask` throws `ERROR_INVALID_CALLBACK_URL` (no task, no charge). Send one task first and let it finish before a burst.
+- **Signature on every delivery.** `X-Browsa-Signature: t=<unix seconds>, v1=<hex>` is HMAC-SHA256 with the secret's bytes as key over `"<t>.<raw body>"`; `verifySignature` checks it and refuses a delivery older than 5 minutes.
+- **De-duplicate on `taskId`.** A delivery can arrive more than once.
+
+One host receives at most 60 requests a minute. The URL must be `https://` on a public host name, port 443 or 8443.
 
 Coming from a library that cannot be pointed at another server:
 

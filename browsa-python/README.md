@@ -8,6 +8,7 @@ Real browsers for AI agents: the official Python SDK for [browsa.io](https://bro
 
 [![PyPI version](https://img.shields.io/pypi/v/browsa.svg)](https://pypi.org/project/browsa/)
 [![Python](https://img.shields.io/pypi/pyversions/browsa.svg)](https://pypi.org/project/browsa/)
+[![CI](https://github.com/browsa-io/browsa/actions/workflows/ci.yml/badge.svg)](https://github.com/browsa-io/browsa/actions/workflows/ci.yml)
 
 ## Install
 
@@ -19,10 +20,12 @@ Zero dependencies. Pure stdlib. Single-file wheel.
 
 ## Five-line hello world
 
+You need a Browsa API key: create one at [app.browsa.io/dashboard/keys](https://app.browsa.io/dashboard/keys) and set it as `BROWSA_API_KEY`. New accounts get 100 free credits after email verification, no card.
+
 ```python
 from browsa import Client
 
-c = Client(api_key="agt_live_...")
+c = Client()   # reads BROWSA_API_KEY; or Client(api_key="agt_live_...")
 job = c.run_task(
     task="Go to news.ycombinator.com and return the top story title.",
     llm="browsa",
@@ -316,7 +319,7 @@ print(link["live_url"])                             # opens once; make one per p
 
 ## Captcha solving
 
-`browsa.captcha` is a client for Browsa's captcha API: `createTask`, `getTaskResult` and `getBalance` in the format CapSolver, Anti-Captcha, CapMonster and 2Captcha's v2 API share. Same key and credits as the browser API. Failed and unsolvable tasks are not charged. Measured pass rates per type: <https://browsa.io/captcha>.
+`browsa.captcha` is a client for Browsa's captcha API: `createTask`, `getTaskResult` and `getBalance`, plus reports and callbacks, in the format CapSolver, Anti-Captcha, CapMonster and 2Captcha's v2 API share. Same key and credits as the browser API. Failed and unsolvable tasks are not charged. Measured pass rates per type: <https://browsa.io/captcha>.
 
 ```python
 from browsa.captcha import CaptchaClient, CaptchaError, tasks
@@ -346,7 +349,51 @@ for t in cap.list_types():          # every type: status, parameters, price, mea
     print(t["type"], t["status"], t["price"]["creditsPerSolve"], [p["name"] for p in t["required"]])
 ```
 
-More builders: `geetest_slide_v3`, `geetest_slide_v4`, `cloudflare_challenge`. A failed solve is free; `CaptchaError` carries `fix` (what to change) and `charged`. Reports are recorded and used to improve solving. One runnable file per task type, with every parameter: [`examples/captcha/`](examples/captcha).
+More builders: `geetest_slide_v3`, `geetest_slide_v4`, `cloudflare_challenge`, and the question, drag and box types:
+
+```python
+text = cap.solve(tasks.text_question("If tomorrow is Saturday, what day is today?"))["text"]
+places = cap.solve(tasks.drag_drop(background, [piece1, piece2]))["coordinates"]    # one {"x", "y"} per piece
+boxes = cap.solve(tasks.bounding_box(picture, "the red car"))["bounding_boxes"]     # {"xMin", "yMin", "xMax", "yMax"}
+```
+
+A failed solve is free; `CaptchaError` carries `fix` (what to change) and `charged`. An incorrect report refunds that solve once, within the workspace's report limits: `refunded` in the answer says whether a refund was made. One runnable file per task type, with every parameter: [`examples/captcha/`](https://github.com/browsa-io/browsa/tree/main/browsa-python/examples/captcha).
+
+### Callbacks
+
+Pass `callback_url` and the API also POSTs the finished answer (the JSON `get_task_result` gives) to your public `https://` endpoint. `get_task_result` keeps working, and the result stays there for 10 minutes.
+
+```python
+sol = cap.solve(tasks.turnstile("https://example.com", "0x4AAAA..."), callback_url="https://hooks.example.com/captcha")
+secret = cap.callback_secret()            # hex; cap.rotate_callback_secret() replaces it
+```
+
+Your endpoint does three things:
+
+```python
+import json
+from browsa import webhooks
+
+seen = set()
+
+def handle(raw_body: bytes, headers) -> tuple:                 # (HTTP status, reply body)
+    if not webhooks.verify_signature(raw_body, headers.get("X-Browsa-Signature", ""), secret):
+        return 401, "bad signature"
+    msg = json.loads(raw_body)
+    if msg.get("type") == "callback.verify":                  # once per host: echo the challenge
+        return 200, json.dumps({"challenge": msg["challenge"]})
+    if msg["taskId"] in seen:                                 # a repeat
+        return 200, "duplicate"
+    seen.add(msg["taskId"])
+    # use msg["solution"] (or msg["errorCode"]), msg["cost"], msg["solveSeconds"]
+    return 200, "ok"
+```
+
+- **Host check, once per host.** Before the first callback to a host the API POSTs `{"type": "callback.verify", "challenge": "..."}`; answer 2xx with `{"challenge": "<the same value>"}` within 6 s. Until the host has answered, `create_task` raises `ERROR_INVALID_CALLBACK_URL` (no task, no charge). Send one task first and let it finish before a burst.
+- **Signature on every delivery.** `X-Browsa-Signature: t=<unix seconds>, v1=<hex>` is HMAC-SHA256 with the secret's bytes as key over `"<t>.<raw body>"`; `verify_signature` checks it and refuses a delivery older than 5 minutes.
+- **De-duplicate on `taskId`.** A delivery can arrive more than once.
+
+One host receives at most 60 requests a minute. The URL must be `https://` on a public host name, port 443 or 8443.
 
 Coming from a library that cannot be pointed at another server:
 

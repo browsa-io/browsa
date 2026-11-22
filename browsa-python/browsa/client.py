@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+import os
 import socket
 import time
 import urllib.error
@@ -505,6 +506,23 @@ class _AsyncWrap:
         return call
 
 
+KEYS_URL = "https://app.browsa.io/dashboard/keys"
+
+
+def resolve_api_key(api_key: Optional[str] = None) -> str:
+    """The key to use: the argument, or ``BROWSA_API_KEY`` from the environment.
+
+    Raises ValueError with what to do when there is none, or when it is not a Browsa key."""
+    key = (api_key or os.environ.get("BROWSA_API_KEY") or "").strip()
+    if not key:
+        raise ValueError(
+            f"api_key is required: pass api_key or set BROWSA_API_KEY. Create a key at {KEYS_URL}"
+        )
+    if not key.startswith("agt_"):
+        raise ValueError(f"api_key must start with 'agt_'. Create a key at {KEYS_URL}")
+    return key
+
+
 class Client:
     """Synchronous REST client.
 
@@ -513,23 +531,22 @@ class Client:
     `get_job` directly.
 
     Args:
-        api_key: An `agt_live_*` key minted from browsa.io → API Keys.
-        base_url: Override for self-hosted / staging.
+        api_key: An `agt_live_*` key. Default: the `BROWSA_API_KEY` environment
+            variable. Create a key at https://app.browsa.io/dashboard/keys
+        base_url: Another Browsa API (staging). Default: `BROWSA_BASE_URL`, else https://browsa.io
         timeout: Per-request HTTP timeout (seconds). Long-poll calls override
             this internally; this is the upper bound for one round trip.
     """
 
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
         *,
-        base_url: str = DEFAULT_BASE_URL,
+        base_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
-        if not api_key or not api_key.startswith("agt_"):
-            raise ValueError(
-                "api_key must start with 'agt_'. Mint one at https://app.browsa.io/dashboard/keys"
-            )
+        api_key = resolve_api_key(api_key)
+        base_url = base_url or os.environ.get("BROWSA_BASE_URL") or DEFAULT_BASE_URL
         self._t = _Transport(api_key, base_url, timeout)
         #: Robots: saved browser jobs (create, list, get, update, delete, run, pause, resume).
         self.robots = Robots(self._t)
@@ -1872,9 +1889,9 @@ class AsyncClient:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
         *,
-        base_url: str = DEFAULT_BASE_URL,
+        base_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         self._sync = Client(api_key, base_url=base_url, timeout=timeout)

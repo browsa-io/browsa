@@ -10,8 +10,9 @@
 **Captcha solving for a browser of your own.** An agent that already drives its own browser keeps it: `detect_captcha` finds the captcha in the page's HTML on your machine, `solve_captcha_on_page` returns the solution with the step to apply it in that browser. See [Captchas in your own browser](#captchas-in-your-own-browser).
 
 [![npm version](https://img.shields.io/npm/v/@browsa/mcp.svg)](https://www.npmjs.com/package/@browsa/mcp)
+[![CI](https://github.com/browsa-io/browsa/actions/workflows/ci.yml/badge.svg)](https://github.com/browsa-io/browsa/actions/workflows/ci.yml)
 
-You need a Browsa API key: [app.browsa.io/dashboard/keys](https://app.browsa.io/dashboard/keys). Replace `agt_live_...` below with it.
+You need a Browsa API key: create one at [app.browsa.io/dashboard/keys](https://app.browsa.io/dashboard/keys) and replace `agt_live_...` below with it. New accounts get 100 free credits after email verification, no card.
 
 ## Install
 
@@ -105,7 +106,7 @@ Command `npx -y @browsa/mcp`, environment `BROWSA_API_KEY`. Transport: stdio. Re
 
 ### Only the captcha tools, next to a browser of your own
 
-Three tools instead of nine, about 510 tokens of tool definitions, and a spend cap for the session:
+Three tools instead of nine, about 600 tokens of tool definitions, and a spend cap for the session:
 
 ```json
 {
@@ -131,7 +132,7 @@ Then ask: *"Open books.toscrape.com and list the first five titles with their pr
 
 ## Tools
 
-Nine tools are on by default. Their schemas are about 1.2k tokens in total.
+Nine tools are on by default. Their definitions are about 1.45k tokens in total. Every tool carries MCP annotations (a title, `readOnlyHint`, `destructiveHint`), so a client can tell a read from an action before it asks you: see [Annotations](#annotations).
 
 | Tool | What it does |
 |---|---|
@@ -225,18 +226,32 @@ The tool definitions a client loads before the first message, per setting. Token
 
 | Tools listed | `BROWSA_MCP_TOOLS` | Tools | Tokens (chars / 4) |
 |---|---|---|---|
-| default | (unset) | 9 | 1,244 |
-| the captcha tools for your own browser | `captcha_page,-core` | 3 | 513 |
-| the captcha API tools | `captcha,-core` | 3 | 696 |
-| `tasks` | `tasks,-core` | 5 | 1,296 |
-| `robots` | `robots,-core` | 3 | 433 |
-| `schedules` | `schedules,-core` | 2 | 461 |
-| `webhooks` | `webhooks,-core` | 3 | 210 |
-| `cdp` | `cdp,-core` | 2 | 640 |
-| `admin` | `admin,-core` | 6 | 447 |
-| everything | `all` | 36 | 5,936 |
+| default | (unset) | 9 | 1,450 |
+| the captcha tools for your own browser | `captcha_page,-core` | 3 | 603 |
+| the captcha API tools | `captcha,-core` | 3 | 765 |
+| `tasks` | `tasks,-core` | 5 | 1,410 |
+| `robots` | `robots,-core` | 3 | 496 |
+| `schedules` | `schedules,-core` | 2 | 505 |
+| `webhooks` | `webhooks,-core` | 3 | 281 |
+| `cdp` | `cdp,-core` | 2 | 691 |
+| `admin` | `admin,-core` | 6 | 575 |
+| everything | `all` | 36 | 6,770 |
 
-A group adds its row to the default's 1,244. Prompts are fetched only when picked and add nothing.
+A group adds its row to the default's 1,450. Prompts are fetched only when picked and add nothing. The annotations are about 200 of the default's tokens (0.8.0 listed the same nine tools in 1,244).
+
+### Annotations
+
+| Hint | Tools |
+|---|---|
+| Read-only (`readOnlyHint: true`): changes nothing, spends nothing | `observe`, `read`, `screenshot`, `secrets`, `get_job`, `list_job_files`, `list_robots`, `get_robot_run`, `list_schedules`, `list_webhooks`, `list_captcha_types`, `detect_captcha`, `captcha_allowance`, `credits`, `list_browsers`, `list_identities`, `proxy_network`, `list_llm_keys`, `list_models` |
+| Can change something for good (`destructiveHint: true`) | `act`, `flow`, `run_task`, `run_robot` (the page decides what a click does), `close`, `stop_browser`, `cancel_job`, `delete_webhook` |
+| Writes, not destructive | `open`, `handoff`, `respond_to_job`, `create_schedule`, `create_webhook`, `start_browser`, `solve_captcha_task`, `solve_captcha_on_page`, `report_captcha_result` |
+
+`detect_captcha` and `captcha_allowance` also say `openWorldHint: false`: they run inside the server process and make no request.
+
+### Command line
+
+`npx -y @browsa/mcp --help` prints the options and the environment variables, `--version` the version. Both exit at once and need no key; neither starts the server.
 
 ## Captchas in your own browser
 
@@ -302,6 +317,10 @@ Built-in prompts, listed only when their tools are on: **solve_captcha_on_my_pag
 - No telemetry: no analytics, usage pings or update checks. The one request no tool asked for is a `GET` of the public captcha type list at startup, with no key and no parameters, and only when a `captcha_page` tool is listed (`BROWSA_CAPTCHA_CATALOGUE=bundled` stops it).
 
 The full table is in [SECURITY.md](./SECURITY.md).
+
+## Upgrading from 0.8.0
+
+Nothing to change. 0.8.1 adds annotations on every tool, the server's `instructions`, and the `--help` and `--version` flags. Tool names, arguments and answers are the same.
 
 ## Upgrading from 0.7
 

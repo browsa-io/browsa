@@ -1,8 +1,52 @@
 # Changelog
 
-Covers the three packages: npm `browsa`, npm `@browsa/mcp` and PyPI `browsa`. They share a version number.
+Covers npm `browsa`, PyPI `browsa` and npm `@browsa/mcp`. The two `browsa` SDKs share a version number; `@browsa/mcp` has its own. A heading that names packages covers only those. The integrations keep their own changelogs: [langchain-browsa](integrations/langchain-browsa/CHANGELOG.md), [crewai-browsa](integrations/crewai-browsa/CHANGELOG.md), [n8n-nodes-browsa](integrations/n8n-nodes-browsa/CHANGELOG.md).
 
-## 0.8.0 (`@browsa/mcp` only; prepared 2026-11-21, not published)
+## 0.8.1 (`@browsa/mcp` only, 2026-11-21)
+
+No breaking change: tool names, arguments and answers are the same.
+
+### Added
+
+- **Annotations on every tool** (MCP `annotations`): a `title`, `readOnlyHint` and `destructiveHint` on all 36 tools, `idempotentHint` on `close`, `stop_browser`, `cancel_job`, `delete_webhook` and `detect_captcha`, and `openWorldHint: false` on the two tools that run inside the server process (`detect_captcha`, `captcha_allowance`). A client can tell a read from an action before it asks. The tools that act on a page (`act`, `flow`, `run_task`, `run_robot`) are marked destructive, because the page decides what a click does. The README lists every tool's hints.
+- **`--help` and `--version`** (`-h`, `-v`): print and exit, without starting the server and without a key.
+- **Server `instructions`** at `initialize`: how the browser tools fit together, what spends credits, and how optional groups are turned on.
+- `serverInfo.title` is `Browsa`.
+
+### Changed
+
+- One wording for the key: "Create a key at https://app.browsa.io/dashboard/keys" in the missing-key message, the startup notice and the refused-key hint (some said "mint").
+- The tool list is larger by the annotations: the default nine tools are about 1,450 tokens of definitions (1,244 in 0.8.0), `captcha_page,-core` about 600 (513). The README table has every group.
+
+## 0.7.1 (npm `browsa` and PyPI `browsa`, 2026-11-21)
+
+No breaking change. `@browsa/mcp` is not part of this release.
+
+### Added
+
+- **Captcha callbacks** (the API has them on since 2026-11-21): `callback_url` / `callbackUrl` on `create_task` / `createTask` and on `solve`; `callback_secret()` / `callbackSecret()` for the hex secret deliveries are signed with, and `rotate_callback_secret()` / `rotateCallbackSecret()` to replace it. Also on `AsyncCaptchaClient`. What the receiving endpoint has to do, with code, is in both READMEs:
+  - the one-time host check: the API POSTs `{"type": "callback.verify", "challenge": "..."}` and the endpoint echoes `{"challenge": "..."}`; until it has, `createTask` answers `ERROR_INVALID_CALLBACK_URL` (no task, no charge);
+  - the signature on every delivery: `X-Browsa-Signature: t=<unix seconds>, v1=<hex>`, HMAC-SHA256 keyed with the secret's bytes over `"<t>.<raw body>"`, checked by the existing `webhooks.verify_signature` / `verifySignature` with the hex secret as it is;
+  - de-duplication on the body's `taskId`. One host receives at most 60 requests a minute.
+- **Builders for the task types that went live on 2026-11-21:** `text_question` / `textQuestion` (`TextCaptchaTask`: a question asked in words), `drag_drop` / `dragDrop` (`DragDropTask`: where each piece goes in a picture) and `bounding_box` / `boundingBox` (`BoundingBoxTask`: a box around what an instruction names), with solution types. `TextCaptchaTask`, `DragDropTask` and `BoundingBoxTask` are in Python's `TASK_TYPES`.
+- **`Client()` with no argument** (Python `Client`, `AsyncClient`; TypeScript `new Client()`): the key is read from `BROWSA_API_KEY`. `BROWSA_BASE_URL` is read too, as the CLI and the MCP server already did. An argument still wins.
+- **`browsa --version`** (also `-v`, `browsa version`) prints the version and needs no key.
+- TypeScript exports the types `CaptchaCost`, `CaptchaReport`, `CaptchaTypeInfo`, `GeeTestSlideSolution`, `CloudflareSolution`, `TextQuestionSolution`, `DragDropSolution`, `BoundingBoxSolution`.
+- [`examples/`](examples): ten runnable scripts, each with its credit cost at the top, run by CI against a local stand-in of the API.
+
+### Changed
+
+- **Reports:** an incorrect report refunds that solve once, within the workspace's report limits (refunds are on at the API since 2026-11-21). `refunded` in the answer says whether a refund was made; not every report is refunded. Docstrings, both READMEs and `examples/captcha/_run.py` say so. The calls and their answers are unchanged.
+- **A missing key says what to do, the same way everywhere.** Python `Client()` without a key raised a bare `TypeError` (a missing argument); it now raises `ValueError("api_key is required: pass api_key or set BROWSA_API_KEY. Create a key at https://app.browsa.io/dashboard/keys")`. TypeScript, the CLI and both captcha clients use the same sentence, and "Create a key at" replaces "Mint one at" in every message.
+- PyPI: the Changelog link points at this file; Python 3.13 and 3.14 are listed (CI runs the tests on 3.9 to 3.14).
+
+### Repository
+
+- CI on every push and pull request: the TypeScript SDK and the MCP server on Node 20, 22 and 24, the Python SDK on 3.9 to 3.14, the examples, and the release scripts. No job needs a key.
+- The npm publish workflows stop within seconds, with the form values, when npm trusted publishing is not set up for the package, and a package tag now creates its GitHub Release from this file.
+- `SECURITY.md`, `CONTRIBUTING.md`, a code of conduct, issue forms and a pull request template.
+
+## 0.8.0 (`@browsa/mcp` only, 2026-11-21)
 
 No breaking change: the default tool list is the same nine tools, and every existing tool keeps its name, arguments and answers. Everything new is off until its group or variable is set, except retries.
 

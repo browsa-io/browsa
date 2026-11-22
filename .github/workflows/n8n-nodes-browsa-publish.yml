@@ -98,3 +98,15 @@ jobs:
           npm run release
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # The GitHub Release for the tag, with this version's section of
+  # integrations/n8n-nodes-browsa/CHANGELOG.md as its notes.
+  release:
+    name: GitHub Release
+    needs: publish
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ github.ref_name }}
