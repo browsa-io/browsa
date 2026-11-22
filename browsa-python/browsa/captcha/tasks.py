@@ -26,19 +26,23 @@ RECAPTCHA_V2_CLASSIFICATION = "ReCaptchaV2Classification"
 AWS_WAF_CLASSIFICATION = "AwsWafClassification"
 VISION_ENGINE = "VisionEngine"
 GEETEST_SLIDE = "GeeTestSlide"
-ROTATE = "RotateTask"              # refused by the service until measured through it (2026-11-21)
-CLICK_ORDER = "ClickOrderTask"     # refused by the service until measured through it (2026-11-21)
-ALTCHA = "AltchaTask"              # refused by the service until measured through it (2026-11-21)
+ROTATE = "RotateTask"
+CLICK_ORDER = "ClickOrderTask"
+ALTCHA = "AltchaTask"              # off in the service on 2026-11-22 (list_types() says why)
 TEXT_QUESTION = "TextCaptchaTask"
 BOUNDING_BOX = "BoundingBoxTask"
-DRAW_AROUND = "DrawAroundTask"     # refused by the service until switched on (2026-11-21)
+DRAW_AROUND = "DrawAroundTask"     # off in the service on 2026-11-22 (list_types() says why)
 DRAG_DROP = "DragDropTask"
 CLOUDFLARE_CHALLENGE = "AntiCloudflareTask"
+# list_types() says which types are live now (31 of 34 on 2026-11-22, hCaptcha and the audio challenge among them)
+PUZZLE_TYPES = ("GeeTestGridTask", "GeeTestIconTask", "GeeTestNineTask", "GeeTestShapeTask", "SliderGapTask",
+                "TileSwapTask", "JigsawTask", "MtCaptchaTask", "CyberSiaraTask", "AudioTask",
+                "HCaptchaTask")
 
 # The live list, with parameters, prices and measured numbers: CaptchaClient.list_types()
 # (GET https://captcha.browsa.io/types).
 RECOGNITION_TYPES = (IMAGE_TO_TEXT, RECAPTCHA_V2_CLASSIFICATION, AWS_WAF_CLASSIFICATION, VISION_ENGINE, GEETEST_SLIDE,
-                     TEXT_QUESTION, BOUNDING_BOX, DRAG_DROP)
+                     ROTATE, CLICK_ORDER, TEXT_QUESTION, BOUNDING_BOX, DRAG_DROP) + PUZZLE_TYPES
 TOKEN_TYPES = (
     "ReCaptchaV2TaskProxyLess", "ReCaptchaV2Task",
     "ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTask",
@@ -71,6 +75,8 @@ _alias(["BoundingBoxTask"], BOUNDING_BOX)
 _alias(["DrawAroundTask"], DRAW_AROUND)
 _alias(["DragDropTask"], DRAG_DROP)
 _alias(["AntiCloudflareTask"], CLOUDFLARE_CHALLENGE)
+for _t in PUZZLE_TYPES:
+    _alias([_t], _t)
 # Already proxyless names stay proxyless
 _alias(["ReCaptchaV2TaskProxyLess", "NoCaptchaTaskProxyless"], "ReCaptchaV2TaskProxyLess")
 _alias(["ReCaptchaV2EnterpriseTaskProxyLess"], "ReCaptchaV2EnterpriseTaskProxyLess")

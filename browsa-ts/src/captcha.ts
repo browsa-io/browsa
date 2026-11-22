@@ -54,7 +54,10 @@ export class CaptchaTimeoutError extends CaptchaError {
 
 export type RecognitionTaskType = "ImageToTextTask" | "ReCaptchaV2Classification" | "AwsWafClassification" | "VisionEngine" | "GeeTestSlide"
   | "RotateTask" | "ClickOrderTask" | "AltchaTask"
-  | "TextCaptchaTask" | "BoundingBoxTask" | "DrawAroundTask" | "DragDropTask";
+  | "TextCaptchaTask" | "BoundingBoxTask" | "DrawAroundTask" | "DragDropTask"
+  // GET /types says which types are live now (31 of 34 on 2026-11-22, hCaptcha and the audio challenge among them)
+  | "GeeTestGridTask" | "GeeTestIconTask" | "GeeTestNineTask" | "GeeTestShapeTask" | "SliderGapTask"
+  | "TileSwapTask" | "JigsawTask" | "MtCaptchaTask" | "CyberSiaraTask" | "AudioTask" | "HCaptchaTask";
 export type TokenTaskType =
   | "ReCaptchaV2TaskProxyLess" | "ReCaptchaV2Task"
   | "ReCaptchaV2EnterpriseTaskProxyLess" | "ReCaptchaV2EnterpriseTask"
@@ -69,6 +72,8 @@ export const CAPTCHA_TASK_TYPES: CaptchaTaskType[] = [
   "ImageToTextTask", "ReCaptchaV2Classification", "AwsWafClassification", "VisionEngine", "GeeTestSlide",
   "RotateTask", "ClickOrderTask", "AltchaTask",
   "TextCaptchaTask", "BoundingBoxTask", "DrawAroundTask", "DragDropTask",
+  "GeeTestGridTask", "GeeTestIconTask", "GeeTestNineTask", "GeeTestShapeTask", "SliderGapTask",
+  "TileSwapTask", "JigsawTask", "MtCaptchaTask", "CyberSiaraTask", "AudioTask", "HCaptchaTask",
   "ReCaptchaV2TaskProxyLess", "ReCaptchaV2Task", "ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTask",
   "ReCaptchaV3TaskProxyLess", "ReCaptchaV3Task", "ReCaptchaV3EnterpriseTaskProxyLess", "ReCaptchaV3EnterpriseTask",
   "AntiTurnstileTaskProxyLess", "AntiTurnstileTask", "AntiCloudflareTask",

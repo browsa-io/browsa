@@ -2,6 +2,22 @@
 
 Covers npm `browsa`, PyPI `browsa` and npm `@browsa/mcp`. The two `browsa` SDKs share a version number; `@browsa/mcp` has its own. A heading that names packages covers only those. The integrations keep their own changelogs: [langchain-browsa](integrations/langchain-browsa/CHANGELOG.md), [crewai-browsa](integrations/crewai-browsa/CHANGELOG.md), [n8n-nodes-browsa](integrations/n8n-nodes-browsa/CHANGELOG.md).
 
+## 0.8.2 (`@browsa/mcp` only, 2026-11-22)
+
+No breaking change: tool names, arguments and answers are the same.
+
+### Changed
+
+- The bundled captcha type list is the catalogue of 22 November: 34 types, 31 live, among them `HCaptchaTask` and `AudioTask` (the reCAPTCHA v2 audio challenge). The server still fetches the live list at startup when a `captcha_page` tool is listed; the bundled copy is what it uses offline or with `BROWSA_CAPTCHA_CATALOGUE=bundled`.
+
+## 0.7.2 (npm `browsa` and PyPI `browsa`, 2026-11-22)
+
+No breaking change. `@browsa/mcp` has its own release (0.8.2).
+
+### Changed
+
+- The type lists know the 31 live captcha API types, among them `HCaptchaTask` and `AudioTask`: TypeScript `CAPTCHA_TASK_TYPES` and the `RecognitionTaskType` union, Python `TASK_TYPES` (and `RECOGNITION_TYPES`). Also new in the lists: `GeeTestGridTask`, `GeeTestIconTask`, `GeeTestNineTask`, `GeeTestShapeTask`, `SliderGapTask`, `TileSwapTask`, `JigsawTask`, `MtCaptchaTask`, `CyberSiaraTask`, and in Python `RotateTask` and `ClickOrderTask`. 0.7.1 already sent these types as they were; only the lists and types are new. `list_types()` / `listTypes()` says which types are live now.
+
 ## 0.8.1 (`@browsa/mcp` only, 2026-11-21)
 
 No breaking change: tool names, arguments and answers are the same.

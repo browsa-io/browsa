@@ -1,6 +1,6 @@
 {
   "name": "@browsa/mcp",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "mcpName": "io.browsa/browsa",
   "description": "MCP server for Browsa: real cloud browsers (Phantom) for Claude, Cursor, VS Code and any MCP client, and captcha solving for a browser of your own",
   "license": "MIT",

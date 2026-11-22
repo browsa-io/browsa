@@ -303,3 +303,22 @@ def test_new_builders_use_the_catalogue_names():
         tasks.cloudflare_challenge("https://a.example/", None)
     assert {"GeeTestSlide", "AntiCloudflareTask"} <= set(tasks.TASK_TYPES)
     assert tasks.normalize_task({"type": "anticloudflaretask", "proxy": "http://h:1"})["type"] == "AntiCloudflareTask"
+
+
+# The 31 types GET https://captcha.browsa.io/types listed as live on 2026-11-22.
+LIVE_20261122 = {
+    "ImageToTextTask", "ReCaptchaV2Classification", "AwsWafClassification", "GeeTestSlide", "RotateTask",
+    "ClickOrderTask", "GeeTestGridTask", "GeeTestIconTask", "GeeTestNineTask", "GeeTestShapeTask", "SliderGapTask",
+    "TileSwapTask", "JigsawTask", "MtCaptchaTask", "CyberSiaraTask", "AudioTask", "HCaptchaTask", "TextCaptchaTask",
+    "BoundingBoxTask", "DragDropTask", "AntiTurnstileTaskProxyLess", "AntiTurnstileTask", "ReCaptchaV3TaskProxyLess",
+    "ReCaptchaV3Task", "ReCaptchaV3EnterpriseTaskProxyLess", "ReCaptchaV3EnterpriseTask", "ReCaptchaV2TaskProxyLess",
+    "ReCaptchaV2Task", "ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTask", "AntiCloudflareTask",
+}
+
+
+def test_task_types_know_every_type_live_on_22_november():
+    assert len(LIVE_20261122) == 31
+    assert LIVE_20261122 <= set(tasks.TASK_TYPES)
+    assert len(set(tasks.TASK_TYPES)) == len(tasks.TASK_TYPES)
+    for t in ("HCaptchaTask", "AudioTask"):
+        assert tasks.normalize_task({"type": t.lower()})["type"] == t

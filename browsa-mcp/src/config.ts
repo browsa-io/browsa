@@ -1,7 +1,7 @@
 // Settings from the environment and the command line. Nothing here writes
 // a file: the server keeps its state in memory only.
 
-export const VERSION = "0.8.1";
+export const VERSION = "0.8.2";
 // Install forms pass optional settings as empty strings: empty means unset.
 export const API_KEY = process.env.BROWSA_API_KEY?.trim() || undefined;
 export const BASE_URL = (process.env.BROWSA_BASE_URL || "https://browsa.io").replace(/\/+$/, "");

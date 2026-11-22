@@ -126,7 +126,7 @@ describe("MCP solve_captcha_task", () => {
     assert.ok(!/\d+ ?%/.test(t.description), "a rate is written into the description");
     assert.ok(!/hCaptcha|FunCaptcha|ALTCHA/.test(byName.run_task.description), "run_task lists unmeasured types");
     const init = await mcp.rpc("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "0" } });
-    assert.equal(init.result.serverInfo.version, "0.8.1");
+    assert.equal(init.result.serverInfo.version, "0.8.2");
   });
 
   test("recognition: answered in createTask", async () => {

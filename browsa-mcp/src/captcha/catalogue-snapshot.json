@@ -1,5 +1,5 @@
 {
- "asOf": "2026-11-21",
+ "asOf": "2026-11-22",
  "service": "https://captcha.browsa.io",
  "types": [
   {
@@ -20,7 +20,7 @@
     "websiteURL"
    ],
    "proxy": "none",
-   "credits": 0.004
+   "credits": 0.01
   },
   {
    "type": "ReCaptchaV2Classification",
@@ -122,8 +122,7 @@
    "title": "Rotate the disc",
    "kind": "recognition",
    "family": "rotate",
-   "status": "off",
-   "offReason": "switched off until a measured run passes",
+   "status": "live",
    "required": [
     "imageDisc",
     "imageBackground"
@@ -132,6 +131,7 @@
    "optional": [
     "discCssWidth",
     "bgCssWidth",
+    "discCenter",
     "websiteURL"
    ],
    "proxy": "none",
@@ -142,20 +142,233 @@
    "title": "Click in order",
    "kind": "recognition",
    "family": "click_order",
-   "status": "off",
-   "offReason": "switched off until a measured run passes",
+   "status": "live",
    "required": [
     "image"
    ],
    "oneOf": [],
    "optional": [
     "references",
+    "referenceStrip",
+    "referenceCrop",
+    "split",
+    "crop",
+    "snap",
+    "what",
+    "strongFirst",
     "order",
     "count",
     "websiteURL"
    ],
    "proxy": "none",
    "credits": 0.01
+  },
+  {
+   "type": "GeeTestGridTask",
+   "title": "GeeTest v4 IconCrush and gobang",
+   "kind": "recognition",
+   "family": "geetest_v4_grid",
+   "status": "live",
+   "required": [
+    "kind",
+    "grid"
+   ],
+   "oneOf": [],
+   "optional": [
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.008
+  },
+  {
+   "type": "GeeTestIconTask",
+   "title": "GeeTest v4 icons in order",
+   "kind": "recognition",
+   "family": "geetest_v4_icon",
+   "status": "live",
+   "required": [
+    "image",
+    "references"
+   ],
+   "oneOf": [],
+   "optional": [
+    "hints",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "GeeTestNineTask",
+   "title": "GeeTest v4 nine photos",
+   "kind": "recognition",
+   "family": "geetest_v4_nine",
+   "status": "live",
+   "required": [
+    "reference"
+   ],
+   "oneOf": [
+    [
+     "image",
+     "images"
+    ]
+   ],
+   "optional": [
+    "count",
+    "tileBoxes",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "GeeTestShapeTask",
+   "title": "GeeTest v4 matching shape",
+   "kind": "recognition",
+   "family": "geetest_v4_svg",
+   "status": "live",
+   "required": [
+    "reference",
+    "frames",
+    "tileBoxes"
+   ],
+   "oneOf": [],
+   "optional": [
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "SliderGapTask",
+   "title": "Slider gap (piece picture)",
+   "kind": "recognition",
+   "family": "slider_gap",
+   "status": "live",
+   "required": [
+    "imageBackground",
+    "imageSlice",
+    "top",
+    "bgCssWidth"
+   ],
+   "oneOf": [],
+   "optional": [
+    "sliceCssWidth",
+    "sliceCssHeight",
+    "sliceSprite",
+    "candidates",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.008
+  },
+  {
+   "type": "TileSwapTask",
+   "title": "Swap two tiles",
+   "kind": "recognition",
+   "family": "tile_swap",
+   "status": "live",
+   "required": [
+    "image",
+    "rows",
+    "cols"
+   ],
+   "oneOf": [],
+   "optional": [
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.008
+  },
+  {
+   "type": "JigsawTask",
+   "title": "Jigsaw with decoy holes",
+   "kind": "recognition",
+   "family": "cutcaptcha",
+   "status": "live",
+   "required": [
+    "imageBackground",
+    "pieces"
+   ],
+   "oneOf": [],
+   "optional": [
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.008
+  },
+  {
+   "type": "MtCaptchaTask",
+   "title": "MTCaptcha",
+   "kind": "recognition",
+   "family": "mtcaptcha",
+   "status": "live",
+   "required": [
+    "body"
+   ],
+   "oneOf": [],
+   "optional": [
+    "escalate",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "CyberSiaraTask",
+   "title": "CyberSiARA animated letters",
+   "kind": "recognition",
+   "family": "cybersiara",
+   "status": "live",
+   "required": [],
+   "oneOf": [
+    [
+     "body",
+     "images"
+    ]
+   ],
+   "optional": [
+    "escalate",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "AudioTask",
+   "title": "Audio challenge",
+   "kind": "recognition",
+   "family": "recaptcha_audio",
+   "status": "live",
+   "required": [
+    "body"
+   ],
+   "oneOf": [],
+   "optional": [
+    "lang",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.01
+  },
+  {
+   "type": "HCaptchaTask",
+   "title": "hCaptcha challenge (picture in, actions out)",
+   "kind": "recognition",
+   "family": "hcaptcha",
+   "status": "live",
+   "required": [
+    "image",
+    "prompt"
+   ],
+   "oneOf": [],
+   "optional": [
+    "frameWidth",
+    "frameHeight",
+    "websiteURL"
+   ],
+   "proxy": "none",
+   "credits": 0.03
   },
   {
    "type": "TextCaptchaTask",

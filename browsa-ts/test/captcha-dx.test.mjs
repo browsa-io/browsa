@@ -244,3 +244,15 @@ test("new builders use the catalogue's names", () => {
   assert.ok(CAPTCHA_TASK_TYPES.includes("GeeTestSlide") && CAPTCHA_TASK_TYPES.includes("AntiCloudflareTask"));
   assert.equal(normalizeCaptchaTask({ type: "anticloudflaretask", proxy: "http://h:1" }).type, "AntiCloudflareTask");
 });
+
+test("CAPTCHA_TASK_TYPES knows every type GET /types listed as live on 2026-11-22", () => {
+  const live = ["ImageToTextTask", "ReCaptchaV2Classification", "AwsWafClassification", "GeeTestSlide", "RotateTask",
+    "ClickOrderTask", "GeeTestGridTask", "GeeTestIconTask", "GeeTestNineTask", "GeeTestShapeTask", "SliderGapTask",
+    "TileSwapTask", "JigsawTask", "MtCaptchaTask", "CyberSiaraTask", "AudioTask", "HCaptchaTask", "TextCaptchaTask",
+    "BoundingBoxTask", "DragDropTask", "AntiTurnstileTaskProxyLess", "AntiTurnstileTask", "ReCaptchaV3TaskProxyLess",
+    "ReCaptchaV3Task", "ReCaptchaV3EnterpriseTaskProxyLess", "ReCaptchaV3EnterpriseTask", "ReCaptchaV2TaskProxyLess",
+    "ReCaptchaV2Task", "ReCaptchaV2EnterpriseTaskProxyLess", "ReCaptchaV2EnterpriseTask", "AntiCloudflareTask"];
+  assert.equal(new Set(live).size, 31);
+  for (const t of live) assert.ok(CAPTCHA_TASK_TYPES.includes(t), t);
+  assert.equal(new Set(CAPTCHA_TASK_TYPES).size, CAPTCHA_TASK_TYPES.length);
+});
