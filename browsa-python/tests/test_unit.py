@@ -245,6 +245,28 @@ def test_create_task_keep_browser_fields():
     assert "browser_ttl_seconds" not in c._t.calls[1][2]
 
 
+def test_create_task_keep_open_and_kept_browser():
+    from browsa import Client
+    from browsa.types import SessionBrowser
+    c = Client(api_key="agt_live_test")
+    c._t = _RecordingTransport({"job_id": "s2", "status": "queued", "kind": "task", "session_id": "s2",
+                                "keep_open": "4h", "keep_open_seconds": 14400})
+    j = c.create_task(task="x", llm="browsa", keep_open="4h", idle_timeout="10m")
+    body = c._t.calls[0][2]
+    assert body["keep_open"] == "4h"
+    assert body["idle_timeout"] == "10m"
+    assert "keep_browser" not in body
+    assert j.keep_open == "4h"
+    done = Job.from_response({"id": "s2", "status": "completed", "kind": "task", "step_count": 3,
+                              "browser": {"agent_id": "agt_b1", "status": "live", "until_stopped": False,
+                                          "expires_at": "2026-11-28T14:00:00Z"}})
+    assert done.browser["agent_id"] == "agt_b1"
+    sb = SessionBrowser.from_response({"status": "live", "until_stopped": True, "ends_at": None,
+                                       "paid_until": "2026-11-28T11:00:00Z", "idle_timeout_seconds": 1800})
+    assert sb.until_stopped is True and sb.ends_at is None and sb.idle_timeout_seconds == 1800
+    assert SessionBrowser.from_response({"status": "live"}).until_stopped is None
+
+
 def test_create_session_sets_keep_browser():
     from browsa import Client
     c = Client(api_key="agt_live_test")

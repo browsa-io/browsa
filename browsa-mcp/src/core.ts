@@ -28,7 +28,8 @@ export const coreTools = [
         country: { type: "string", description: "Exit country, e.g. us. Needs a proxy." },
         profile: { type: "string", description: "Saved identity id: keeps its cookies and logins." },
         proxy: { type: "object", description: "{network: datacenter|residential, country?} or your own {server, username?, password?}." },
-        ttl: { type: "string", description: "e.g. 10m (default), 1h." },
+        ttl: { type: "string", description: "e.g. 10m (default), 1h, 8h (up to 24h), or until_stopped (runs until close, 30 min idle, or out of credits). Over 1h needs purchased credits." },
+        idle_timeout: { type: "string", description: "Stop after this long with nothing connected, e.g. 10m; off = never." },
       },
     },
   },
@@ -283,6 +284,7 @@ async function open(args: Record<string, any>): Promise<string> {
   if (country) body.country = country;
   if (args.profile) body.agent_id = args.profile;
   if (args.proxy) body.proxy = args.proxy;
+  if (args.idle_timeout) body.idle_timeout = args.idle_timeout;
   const a = await apiPost("/v1/agents", body, 120_000);
   const id = String(a.id);
   const b = stateOf(id);
@@ -290,7 +292,9 @@ async function open(args: Record<string, any>): Promise<string> {
   const egress = args.proxy?.network ? `Browsa ${args.proxy.network} proxy` : args.proxy ? "your proxy" : "Browsa's address";
   // No credit number here: the create answer's figure is not what the browser ends up costing
   // (live 2026-11-19: it said 5, the balance moved by 1 after close).
-  const head = [`ok: browser ${id} is open (Phantom, cloud, ${egress}), expires ${a.expires_at ?? "with its ttl"}; close it when done`];
+  const ends = a.until_stopped ? "runs until you close it" : `expires ${a.expires_at ?? "with its ttl"}`;
+  const head = [`ok: browser ${id} is open (Phantom, cloud, ${egress}), ${ends}; close it when done`];
+  for (const w of Array.isArray(a.warnings) ? a.warnings : []) if (/ttl|until/i.test(String(w))) head.push(`note: ${w}`);
   if (a.live_url) head.push(`live view (single use, for a person): ${a.live_url}`);
   if (!args.url) {
     head.push("the page is blank; next: act with action navigate and a url");

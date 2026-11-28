@@ -4,6 +4,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import http from "node:http";
+import fs from "node:fs";
 
 const ON = {
   enabled: true,
@@ -22,7 +23,7 @@ function startMockApi(mode) {
     req.on("end", () => {
       const u = new URL(req.url, "http://x");
       const body = raw ? JSON.parse(raw) : undefined;
-      calls.push({ method: req.method, path: u.pathname, body });
+      calls.push({ method: req.method, path: u.pathname, body, ua: req.headers["user-agent"] });
       const send = (status, obj) => {
         res.writeHead(status, { "content-type": "application/json" });
         res.end(JSON.stringify(obj));
@@ -121,6 +122,10 @@ describe("MCP built-in proxy network: enabled", () => {
     const r = await mcp.call("proxy_network");
     assert.equal(r.isError, false);
     assert.deepEqual(r.body, ON);
+    // The call says which MCP version made it (the API counts calls per client).
+    const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    const get = api.calls.filter((c) => c.path === "/v1/proxy-network").at(-1);
+    assert.equal(get.ua, `browsa-mcp/${pkg.version}`);
   });
 
   test("start_browser sends proxy {network, country} as given and reports the egress", async () => {

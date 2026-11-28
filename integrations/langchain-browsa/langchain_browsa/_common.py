@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from importlib import metadata
 from typing import Any, Optional
 
 from browsa import AsyncClient, BrowsaError, Client, Job
@@ -14,6 +15,27 @@ from pydantic import Field, SecretStr, model_validator
 from typing_extensions import Self
 
 API_KEY_ENV = "BROWSA_API_KEY"
+
+
+def _user_agent_suffix() -> str:
+    """``langchain-browsa/<version>``, added to the SDK's User-Agent so Browsa
+    can count calls that come through this package."""
+    try:
+        return "langchain-browsa/" + metadata.version("langchain-browsa")
+    except metadata.PackageNotFoundError:  # a source checkout
+        return "langchain-browsa"
+
+
+USER_AGENT_SUFFIX = _user_agent_suffix()
+
+
+def _new_client(cls: Any, key: str, **kwargs: Any) -> Any:
+    """cls(key, ...) with the User-Agent suffix; an SDK release from before
+    user_agent_suffix gets the plain call."""
+    try:
+        return cls(key, user_agent_suffix=USER_AGENT_SUFFIX, **kwargs)
+    except TypeError:
+        return cls(key, **kwargs)
 
 _MISSING_KEY = (
     "No Browsa API key. Set the BROWSA_API_KEY environment variable or pass "
@@ -48,9 +70,9 @@ def build_clients(
     if client is None:
         if not key:
             raise ValueError(_MISSING_KEY)
-        client = Client(key, base_url=base_url, timeout=timeout)
+        client = _new_client(Client, key, base_url=base_url, timeout=timeout)
     if async_client is None and key:
-        async_client = AsyncClient(key, base_url=base_url, timeout=timeout)
+        async_client = _new_client(AsyncClient, key, base_url=base_url, timeout=timeout)
     return client, async_client
 
 

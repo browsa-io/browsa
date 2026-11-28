@@ -26,6 +26,18 @@ def test_api_key_from_env_is_sent_as_header(fake_http: FakeHTTP) -> None:
     assert req.url.startswith("https://browsa.io/v1/")
 
 
+def test_user_agent_names_this_package(fake_http: FakeHTTP) -> None:
+    # Browsa counts API calls per client: the SDK's own name and version,
+    # then langchain-browsa's.
+    from langchain_browsa._common import USER_AGENT_SUFFIX
+
+    BrowsaScrapeTool().invoke({"url": "https://example.com"})
+    ua = fake_http.requests[-1].headers["user-agent"]
+    assert ua.startswith("browsa-python/")
+    assert USER_AGENT_SUFFIX.startswith("langchain-browsa")
+    assert ua.endswith(" " + USER_AGENT_SUFFIX)
+
+
 def test_explicit_api_key_wins_over_env(fake_http: FakeHTTP) -> None:
     BrowsaScrapeTool(api_key="agt_live_explicit").invoke({"url": "https://example.com"})
     assert fake_http.requests[-1].headers["x-api-key"] == "agt_live_explicit"

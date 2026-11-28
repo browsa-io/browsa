@@ -74,7 +74,7 @@ CLI: `browsa llm-keys` lists saved keys; `browsa run "<task>" --llm-key-id <id>`
 
 ## Models
 
-A task runs on one of Browsa's hosted tiers, or on any provider model with your own key. reCAPTCHA v2 image grids (3 x 3, 4 x 4 and reloading tiles), image-text captchas, GeeTest slide puzzles (v3 and v4) and AWS WAF captchas met during a task are solved in the browser's own session on workspaces that have bought a pack; other kinds are listed at https://browsa.io/captcha.
+A task runs on one of Browsa's hosted tiers, or on any provider model with your own key. reCAPTCHA v2 picture grids (3 x 3, 4 x 4 and reloading tiles) and its audio challenge, hCaptcha, image-text captchas, GeeTest v3 and v4 puzzles, Tencent, NetEase Yidun and Dingxiang puzzles, MTCaptcha, Cutcaptcha, CyberSiARA and AWS WAF captchas (reCAPTCHA v3, Turnstile and Cloudflare's page check pass in the Phantom session by themselves) met during a task are solved in the browser's own session: 25 free solves to try (up to 10 a day), then included with any pack (fair use 300 an hour, 3,000 a day); other kinds are listed at https://browsa.io/captcha.
 
 | `llm` | What it is |
 |---|---|
@@ -123,6 +123,9 @@ const job = await c.runTask({
   task: "Open the product page and return title, price and in_stock",
   llm: "browsa",
   initialUrl: `${BOOK}/sharp-objects_997/index.html`,
+  // Typed fields become the robot's columns (and what monitors can watch)
+  output_schema: { type: "object", required: ["title", "price", "in_stock"], properties: {
+    title: { type: "string" }, price: { type: "string" }, in_stock: { type: "boolean" } } },
   recordRecipe: true,
 });
 

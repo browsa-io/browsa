@@ -416,6 +416,37 @@ test("createTask maps keepBrowser + browserTtlSeconds to snake_case", async () =
   assert.equal(job.sessionUrl, "https://browsa.io/v1/sessions/s1");
 });
 
+test("createTask sends keepOpen + idleTimeout; getJob reads the kept browser", async () => {
+  let captured = null;
+  const c = new Client({
+    apiKey: "agt_live_test",
+    fetch: mockFetch({
+      "POST /v1/tasks": async (_u, init) => {
+        captured = JSON.parse(init.body);
+        return json({ job_id: "s2", status: "queued", kind: "task", session_id: "s2", keep_open: "4h", keep_open_seconds: 14400 }, 202);
+      },
+      "GET /v1/jobs/s2": async () => json({ id: "s2", status: "completed", kind: "task", session_id: "s2",
+        browser: { agent_id: "agt_b1", session_id: "s2", status: "live", mode: "burner", expires_at: "2026-11-28T14:00:00Z",
+          expires_in_seconds: 14000, until_stopped: false, ends_at: "2026-11-28T14:00:00Z", paid_until: "2026-11-28T11:00:00Z",
+          idle_timeout_seconds: 0, live_url: "https://browsa.io/live?agent=agt_b1#c=x",
+          extend_url: "https://browsa.io/v1/agents/agt_b1/extend", stop_url: "https://browsa.io/v1/agents/agt_b1",
+          messages_url: "https://browsa.io/v1/sessions/s2/messages" } }),
+    }),
+  });
+  const job = await c.createTask({ task: "x", llm: "browsa", keepOpen: "4h", idleTimeout: "10m" });
+  assert.equal(captured.keep_open, "4h");
+  assert.equal(captured.idle_timeout, "10m");
+  assert.equal("keep_browser" in captured, false);
+  assert.equal(job.keepOpen, "4h");
+  const done = await c.getJob("s2");
+  assert.equal(done.browser.agentId, "agt_b1");
+  assert.equal(done.browser.status, "live");
+  assert.equal(done.browser.untilStopped, false);
+  assert.equal(done.browser.expiresAt, "2026-11-28T14:00:00Z");
+  assert.match(done.browser.liveUrl, /live\?agent=agt_b1/);
+  assert.equal(done.browser.messagesUrl, "https://browsa.io/v1/sessions/s2/messages");
+});
+
 test("createSession always sends keep_browser: true", async () => {
   let captured = null;
   const c = new Client({

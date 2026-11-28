@@ -2,6 +2,23 @@
 
 Covers npm `browsa`, PyPI `browsa` and npm `@browsa/mcp`. The two `browsa` SDKs share a version number; `@browsa/mcp` has its own. A heading that names packages covers only those. The integrations keep their own changelogs: [langchain-browsa](integrations/langchain-browsa/CHANGELOG.md), [crewai-browsa](integrations/crewai-browsa/CHANGELOG.md), [n8n-nodes-browsa](integrations/n8n-nodes-browsa/CHANGELOG.md).
 
+## 0.7.3 (npm and PyPI `browsa`) and 0.8.3 (`@browsa/mcp`), 2026-11-28
+
+No breaking change.
+
+### Added
+
+- npm and PyPI `browsa` 0.7.3: `create_task` / `createTask` take `keep_open` / `keepOpen` (`"15m"`, `"1h"`, `"4h"`, `"8h"`, `"24h"`, any duration, `"until_stopped"`, or `"none"`) and `idle_timeout` / `idleTimeout`: the task's browser stays open that long after the task ends. The job's `browser` (Python a dict, TypeScript `KeptBrowser`) gives its agent id, `expires_at`, `until_stopped` and Phantom Live link; session browsers also show `until_stopped`, `ends_at`, `paid_until` and `idle_timeout_seconds`.
+- `@browsa/mcp` 0.8.3: `run_task` takes `keep_open` and `idle_timeout`, and its result names the kept browser (`browser`, `session_id`).
+
+- npm and PyPI `browsa` 0.7.3: browsers that run for a chosen time or until stopped. `ttl` takes durations up to `"24h"` and `"until_stopped"`; `create_agent` / `createAgent` and `open_session` / `openSession` take `idle_timeout` / `idleTimeout`; new `extend_agent(agent_id, by=|until=|until_stopped=True)` / `extendAgent(agentId, {by|until|untilStopped})` calls `POST /v1/agents/{id}/extend`. Longer than 1 hour and until_stopped need a workspace that has bought credits.
+- `@browsa/mcp` 0.8.3: `open` and `start_browser` take `ttl` up to `24h` or `until_stopped`, and `idle_timeout`; `open` says when a browser runs until closed and passes a cut ttl's warning on.
+
+### Changed
+
+- `@browsa/mcp`: every call sends `User-Agent: browsa-mcp/<version>` (the captcha calls `browsa-mcp/<version> (captcha)`). The `proxy_network` tool and the captcha client sent a bare `browsa-mcp` before.
+- PyPI `browsa`: `Client` and `AsyncClient` take `user_agent_suffix`, added after `browsa-python/<version>` in the User-Agent, for a library built on the SDK (langchain-browsa and crewai-browsa pass their own name and version).
+
 ## 0.8.2 (`@browsa/mcp` only, 2026-11-22)
 
 No breaking change: tool names, arguments and answers are the same.

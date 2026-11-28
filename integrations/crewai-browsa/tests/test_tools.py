@@ -62,6 +62,16 @@ def test_api_key_from_env(monkeypatch: pytest.MonkeyPatch, api: FakeAPI) -> None
     assert sent.headers["x-api-key"] == TEST_KEY
 
 
+def test_user_agent_names_this_package(api: FakeAPI) -> None:
+    # Browsa counts API calls per client: the SDK's own name and version,
+    # then crewai-browsa's.
+    api.add("POST", "/v1/quick/scrape", {"markdown": "x"})
+    BrowsaScrapeTool(api_key=TEST_KEY).run(url="https://example.com")
+    ua = api.sent[0].headers["user-agent"]
+    assert ua.startswith("browsa-python/")
+    assert ua.endswith(f" crewai-browsa/{crewai_browsa.__version__}")
+
+
 def test_explicit_key_and_base_url(api: FakeAPI) -> None:
     api.add("POST", "/v1/quick/scrape", {"markdown": "x"})
     tool = BrowsaScrapeTool(api_key=TEST_KEY, base_url="https://staging.example.test")

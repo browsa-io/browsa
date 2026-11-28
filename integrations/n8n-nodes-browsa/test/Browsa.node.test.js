@@ -20,6 +20,9 @@ test('the credential sends X-API-Key and tests with GET /v1/credits', () => {
 	const cred = new BrowsaApi();
 	assert.equal(cred.name, 'browsaApi');
 	assert.equal(cred.authenticate.properties.headers['X-API-Key'], '={{$credentials.apiKey}}');
+	// Browsa counts calls per client and version.
+	const { version } = require('../package.json');
+	assert.equal(cred.authenticate.properties.headers['User-Agent'], `n8n-nodes-browsa/${version}`);
 	assert.equal(cred.test.request.baseURL, 'https://browsa.io');
 	assert.equal(cred.test.request.url, '/v1/credits');
 	assert.equal(cred.test.request.method, 'GET');

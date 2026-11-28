@@ -39,6 +39,14 @@ DEFAULT_POLL_INTERVAL = 2.0  # seconds between job-status polls
 USER_AGENT = f"browsa-python/{__version__}"
 
 
+def user_agent(suffix: Optional[str] = None) -> str:
+    """The User-Agent the client sends: ``browsa-python/<version>``, then the
+    suffix an integration adds (``langchain-browsa/0.1.2``). The API counts
+    calls per client and version from it; nothing else is read from it."""
+    extra = " ".join(str(suffix or "").split())[:80]
+    return f"{USER_AGENT} {extra}" if extra else USER_AGENT
+
+
 def _llm_key_path(llm_key_id: str) -> str:
     return "/v1/llm-keys/" + urllib.parse.quote(str(llm_key_id), safe="")
 
@@ -52,10 +60,11 @@ class _Transport:
     """Internal sync HTTP transport. Splits request → response → error parsing
     so the same logic can be reused by AsyncClient via run_in_executor."""
 
-    def __init__(self, api_key: str, base_url: str, timeout: float) -> None:
+    def __init__(self, api_key: str, base_url: str, timeout: float, user_agent_suffix: Optional[str] = None) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.user_agent = user_agent(user_agent_suffix)
 
     def request(
         self,
@@ -78,7 +87,7 @@ class _Transport:
         headers = {
             "X-API-Key": self.api_key,
             "Accept": "*/*" if raw else "application/json",
-            "User-Agent": USER_AGENT,
+            "User-Agent": self.user_agent,
         }
         if body is not None:
             data = json.dumps(body).encode("utf-8")
@@ -536,6 +545,9 @@ class Client:
         base_url: Another Browsa API (staging). Default: `BROWSA_BASE_URL`, else https://browsa.io
         timeout: Per-request HTTP timeout (seconds). Long-poll calls override
             this internally; this is the upper bound for one round trip.
+        user_agent_suffix: Added after ``browsa-python/<version>`` in the
+            User-Agent, for a library built on this SDK
+            (``"langchain-browsa/0.1.2"``).
     """
 
     def __init__(
@@ -544,10 +556,11 @@ class Client:
         *,
         base_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        user_agent_suffix: Optional[str] = None,
     ) -> None:
         api_key = resolve_api_key(api_key)
         base_url = base_url or os.environ.get("BROWSA_BASE_URL") or DEFAULT_BASE_URL
-        self._t = _Transport(api_key, base_url, timeout)
+        self._t = _Transport(api_key, base_url, timeout, user_agent_suffix)
         #: Robots: saved browser jobs (create, list, get, update, delete, run, pause, resume).
         self.robots = Robots(self._t)
         #: One run of a robot (get, wait, export).
@@ -591,6 +604,8 @@ class Client:
         secrets: Optional[dict[str, dict[str, str]]] = None,
         keep_browser: Optional[bool] = None,
         browser_ttl_seconds: Optional[int] = None,
+        keep_open: Optional[Union[str, int]] = None,
+        idle_timeout: Optional[str] = None,
         proxy: Optional[Proxy] = None,
         proxy_id: Optional[str] = None,
         record_recipe: Optional[bool] = None,
@@ -661,6 +676,19 @@ class Client:
         then has ``session_id`` (equal to its id) and ``session_url``. Same
         price as a normal task browser. See create_session().
 
+        keep_open: keep the browser open for this long AFTER the task ends:
+        "15m", "1h", "4h", "8h", "24h", any duration, a number of seconds,
+        or "until_stopped" (until destroy_agent(), idle_timeout, or the
+        credits run out); "none" closes it when the task ends. Starts a
+        session like keep_browser, and the finished job's ``browser`` says
+        where it is (agent_id, expires_at, live_url), so you can take it
+        over, extend_agent() it, or send_message() a follow-up. Billed per
+        minute like any browser, one hour held at a time. Over 1h and
+        "until_stopped" need a workspace that has bought credits (else it is
+        cut to 1h, or a 402). Not with browser_ttl_seconds. idle_timeout
+        (with keep_open): stop after this long with nothing connected
+        ("10m"; "off" = never).
+
         proxy: the proxy of the task's browser, one of two forms. Your own
         proxy: ``{"type": "socks5", "host": ..., "port": ..., "username":
         ..., "password": ...}``. Or a tier of Browsa's built-in network,
@@ -702,6 +730,8 @@ class Client:
             "secrets": secrets,
             "keep_browser": keep_browser,
             "browser_ttl_seconds": browser_ttl_seconds,
+            "keep_open": keep_open,
+            "idle_timeout": idle_timeout,
             "proxy": proxy,
             "proxy_id": proxy_id,
             "record_recipe": record_recipe,
@@ -1468,8 +1498,16 @@ class Client:
                      port_scan_protection: Optional[str] = None,
                      proxy: Optional[Proxy] = None,
                      proxy_id: Optional[str] = None,
+                     idle_timeout: Optional[str] = None,
                      **opts: Any) -> dict:
         """POST /v1/agents — provision an agent.
+
+        ttl: how long it runs, e.g. "15m", "8h" (up to 24h), or
+        "until_stopped" (runs until destroy_agent(), 30 min with nothing
+        connected, or the credits run out). Longer than 1h and
+        "until_stopped" need a workspace that has bought credits; a long
+        browser holds one hour of credits at a time. idle_timeout: stop
+        after this long with no connection ("10m"; "off" = never).
 
         Mode auto-detection:
           - if `persona` set + no `ttl` → persistent (vault-synced, monthly)
@@ -1509,10 +1547,25 @@ class Client:
             "media_devices_mode": media_devices_mode,
             "port_scan_protection": port_scan_protection,
             "proxy": proxy, "proxy_id": proxy_id,
+            "idle_timeout": idle_timeout,
         }.items():
             if v is not None: body[k] = v
         body.update(opts)
         return self._t.request("POST", "/v1/agents", body=body)
+
+    def extend_agent(self, agent_id: str, *, by: Optional[str] = None,
+                     until: Optional[str] = None, until_stopped: bool = False) -> dict:
+        """POST /v1/agents/:id/extend — give a running browser more time.
+
+        Pass exactly one: ``by="1h"`` (the end moves later), ``until=`` an
+        RFC 3339 time, or ``until_stopped=True`` (no fixed end). Returns
+        ``expires_at``, ``ends_at``, ``until_stopped``, ``paid_until`` and
+        ``max_end_at``. Past 1 hour needs a workspace that bought credits."""
+        given = [x for x in (by, until, until_stopped or None) if x]
+        if len(given) != 1:
+            raise ValueError("extend_agent: pass exactly one of by, until, until_stopped")
+        body: dict = {"until_stopped": True} if until_stopped else ({"by": by} if by else {"until": until})
+        return self._t.request("POST", f"/v1/agents/{agent_id}/extend", body=body)
 
     def get_agent(self, agent_id: str) -> dict:
         return self._t.request("GET", f"/v1/agents/{agent_id}")
@@ -1531,13 +1584,16 @@ class Client:
         r = self._t.request("GET", f"/v1/agents/{agent_id}/cdp")
         return r.get("cdp_url") if isinstance(r, dict) else ""
 
-    def open_session(self, agent_id: str, *, ttl: Optional[str] = None) -> dict:
+    def open_session(self, agent_id: str, *, ttl: Optional[str] = None,
+                     idle_timeout: Optional[str] = None) -> dict:
         """POST /v1/agents/:id/sessions — open a new session on a
         persistent agent (returns `cdp_http` bound to a fresh session).
-        Burner agents already have an implicit session; use their `cdp_http`
-        (from create_agent or get_agent) for those."""
+        ttl: "1h" by default, up to "24h", or "until_stopped" (1 credit an
+        hour). Burner agents already have an implicit session; use their
+        `cdp_http` (from create_agent or get_agent) for those."""
         body: dict = {}
         if ttl is not None: body["ttl"] = ttl
+        if idle_timeout is not None: body["idle_timeout"] = idle_timeout
         return self._t.request("POST", f"/v1/agents/{agent_id}/sessions", body=body)
 
     def fingerprint(self, agent_id: str) -> dict:
@@ -1893,8 +1949,9 @@ class AsyncClient:
         *,
         base_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        user_agent_suffix: Optional[str] = None,
     ) -> None:
-        self._sync = Client(api_key, base_url=base_url, timeout=timeout)
+        self._sync = Client(api_key, base_url=base_url, timeout=timeout, user_agent_suffix=user_agent_suffix)
         #: Same methods as Client.robots, awaitable.
         self.robots: Any = _AsyncWrap(self._sync.robots)
         #: Same methods as Client.robot_runs, awaitable.
@@ -2097,6 +2154,9 @@ class AsyncClient:
 
     async def destroy_agent(self, agent_id: str) -> None:
         await asyncio.to_thread(self._sync.destroy_agent, agent_id)
+
+    async def extend_agent(self, agent_id: str, **kw: Any) -> dict:
+        return await asyncio.to_thread(self._sync.extend_agent, agent_id, **kw)
 
     async def get_cdp_url(self, agent_id: str) -> str:
         return await asyncio.to_thread(self._sync.get_cdp_url, agent_id)

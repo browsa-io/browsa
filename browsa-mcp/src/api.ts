@@ -2,13 +2,13 @@
 // on the installed browsa SDK having a method for each route.
 
 import { BrowsaError } from "browsa";
-import { API_KEY, BASE_URL, VERSION } from "./config.js";
+import { API_KEY, BASE_URL, USER_AGENT } from "./config.js";
 import { fetchRetry } from "./retry.js";
 
 export { BrowsaError };
 
 function headers(json: boolean): Record<string, string> {
-  const h: Record<string, string> = { "X-API-Key": API_KEY ?? "", Accept: "application/json", "User-Agent": `browsa-mcp/${VERSION}` };
+  const h: Record<string, string> = { "X-API-Key": API_KEY ?? "", Accept: "application/json", "User-Agent": USER_AGENT };
   if (json) h["Content-Type"] = "application/json";
   return h;
 }

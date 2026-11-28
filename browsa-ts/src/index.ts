@@ -80,6 +80,10 @@ export interface Job {
   sessionId?: string;
   sessionUrl?: string;
   turn?: number;
+  /** The browser the task kept open (keepOpen / keepBrowser). Unset when it closed with the task. */
+  browser?: KeptBrowser;
+  /** keepOpen as the API accepted it ("15m", "until_stopped", "none"), on the 202. */
+  keepOpen?: string;
   /** Saved LLM key the job used (never the secret). */
   llmKeyId?: string;
   /** Masked form of that key, e.g. "sk-ant-…a1b2". */
@@ -294,8 +298,37 @@ export interface SessionBrowser {
   liveUrl?: string;
   expiresAt?: string;
   expiresInSeconds?: number;
+  /** Long browsers (keepOpen): no fixed end. Unset for a browser without a lifetime. */
+  untilStopped?: boolean;
+  /** The chosen end; unset when untilStopped. */
+  endsAt?: string;
+  /** Time paid so far (one hour is held at a time). */
+  paidUntil?: string;
+  idleTimeoutSeconds?: number;
   /** Credits paid for the browser: 5 for a burner, 1 per identity session. */
   credits: number;
+}
+
+/**
+ * The browser a task kept open (keepOpen / keepBrowser), on the job: watch or
+ * take it over (liveUrl), give it more time (extendAgent(agentId, ...)), or
+ * send a follow-up task to it (sendMessage(sessionId, ...)).
+ */
+export interface KeptBrowser {
+  agentId: string;
+  sessionId: string;
+  status: "starting" | "live" | "closed" | string;
+  mode?: "burner" | "persistent" | string;
+  expiresAt?: string;
+  expiresInSeconds?: number;
+  untilStopped?: boolean;
+  endsAt?: string | null;
+  paidUntil?: string;
+  idleTimeoutSeconds?: number;
+  liveUrl?: string;
+  extendUrl?: string;
+  stopUrl?: string;
+  messagesUrl?: string;
 }
 
 /** GET /v1/sessions/:id: follow-up messages on the same browser. */
@@ -494,6 +527,19 @@ export interface CreateTaskOptions {
   /** How long a kept browser lives from launch: 300 to 3600, default 900. Only with keepBrowser. */
   browserTtlSeconds?: number;
   /**
+   * Keep the browser open for this long AFTER the task ends: "15m", "1h",
+   * "4h", "8h", "24h", any duration, a number of seconds, or "until_stopped"
+   * (until destroyAgent, idleTimeout, or the credits run out). "none" closes
+   * it when the task ends. Starts a session like keepBrowser, and the job's
+   * `browser` says where it is (agent id, expiresAt, live link). Billed per
+   * minute like any browser; over 1h and "until_stopped" need a workspace
+   * that has bought credits (else it is cut to 1h, or a 402). Don't combine
+   * with browserTtlSeconds.
+   */
+  keepOpen?: string | number;
+  /** With keepOpen: stop after this long with nothing connected ("10m"; "off" = never). */
+  idleTimeout?: string;
+  /**
    * The proxy of the task's browser: your own (`{ type, host, port, ... }`)
    * or a tier of Browsa's built-in network (`{ network: "datacenter",
    * country: "us" }`, only when proxyNetwork() reports enabled).
@@ -648,6 +694,8 @@ function buildTaskBody(opts: CreateTaskOptions): Record<string, unknown> {
     secrets: "secrets",
     keepBrowser: "keep_browser",
     browserTtlSeconds: "browser_ttl_seconds",
+    keepOpen: "keep_open",
+    idleTimeout: "idle_timeout",
     proxy: "proxy",
     proxyId: "proxy_id",
     recordRecipe: "record_recipe",
@@ -729,6 +777,8 @@ function snakeToJob(body: Record<string, any>): Job {
     sessionId: body.session_id,
     sessionUrl: body.session_url,
     turn: typeof body.turn === "number" ? body.turn : undefined,
+    browser: snakeToKeptBrowser(body.browser),
+    keepOpen: typeof body.keep_open === "string" ? body.keep_open : undefined,
     llmKeyId: body.llm_key_id ?? undefined,
     llmKeyMasked: body.llm_key_masked ?? undefined,
     llmKeySource: body.llm_key_source ?? undefined,
@@ -752,6 +802,26 @@ function snakeToJob(body: Record<string, any>): Job {
     savedSecrets: savedSecretsFromResult(result),
     secretsNotSaved: secretsNotSavedFromResult(result),
     raw: body,
+  };
+}
+
+function snakeToKeptBrowser(b: any): KeptBrowser | undefined {
+  if (!b || typeof b !== "object" || !b.agent_id) return undefined;
+  return {
+    agentId: b.agent_id,
+    sessionId: b.session_id || "",
+    status: b.status,
+    mode: b.mode,
+    expiresAt: b.expires_at,
+    expiresInSeconds: typeof b.expires_in_seconds === "number" ? b.expires_in_seconds : undefined,
+    untilStopped: typeof b.until_stopped === "boolean" ? b.until_stopped : undefined,
+    endsAt: b.ends_at,
+    paidUntil: b.paid_until,
+    idleTimeoutSeconds: typeof b.idle_timeout_seconds === "number" ? b.idle_timeout_seconds : undefined,
+    liveUrl: b.live_url,
+    extendUrl: b.extend_url,
+    stopUrl: b.stop_url,
+    messagesUrl: b.messages_url,
   };
 }
 
@@ -785,6 +855,10 @@ function snakeToSession(body: Record<string, any>): Session {
       liveUrl: b.live_url,
       expiresAt: b.expires_at,
       expiresInSeconds: b.expires_in_seconds,
+      untilStopped: typeof b.until_stopped === "boolean" ? b.until_stopped : undefined,
+      endsAt: b.ends_at ?? undefined,
+      paidUntil: b.paid_until,
+      idleTimeoutSeconds: typeof b.idle_timeout_seconds === "number" ? b.idle_timeout_seconds : undefined,
       credits: Number(b.credits || 0),
     },
     creditsCharged: Number(body.credits_charged || 0),
@@ -2751,8 +2825,16 @@ export class Client {
    * network the response also has `proxy_network`, `proxy_bytes` and
    * `proxy_credits`.
    */
+  /**
+   * `ttl`: how long it runs, e.g. "15m", "8h" (up to 24h), or
+   * "until_stopped" (until destroyAgent, 30 min with nothing connected, or
+   * the credits run out). Longer than 1h and "until_stopped" need a
+   * workspace that has bought credits; a long browser holds one hour of
+   * credits at a time. `idleTimeout`: stop after this long with nothing
+   * connected ("10m"; "off" = never).
+   */
   async createAgent(opts: {
-    ttl?: string; country?: string; persona?: string;
+    ttl?: string; country?: string; persona?: string; idleTimeout?: string;
     osType?: string; ja3Profile?: string;
     screenResolution?: string; webrtcMode?: string;
     geolocationMode?: string; geolocationData?: string;
@@ -2772,6 +2854,7 @@ export class Client {
       portScanProtection: "port_scan_protection",
       proxy: "proxy",
       proxyId: "proxy_id",
+      idleTimeout: "idle_timeout",
     };
     for (const [src, dst] of Object.entries(map)) {
       const v = (opts as any)[src];
@@ -2793,6 +2876,19 @@ export class Client {
   }
 
   /**
+   * POST /v1/agents/{id}/extend: give a running browser more time. Pass
+   * exactly one of `by` ("1h"), `until` (RFC 3339) or `untilStopped: true`.
+   * Returns `expires_at`, `ends_at`, `until_stopped`, `paid_until` and
+   * `max_end_at`. Past 1 hour needs a workspace that bought credits.
+   */
+  async extendAgent(agentId: string, opts: { by?: string; until?: string; untilStopped?: boolean }): Promise<Record<string, any>> {
+    const given = [opts.by, opts.until, opts.untilStopped || undefined].filter(Boolean);
+    if (given.length !== 1) throw new Error("extendAgent: pass exactly one of by, until, untilStopped");
+    const body = opts.untilStopped ? { until_stopped: true } : opts.by ? { by: opts.by } : { until: opts.until };
+    return this.request("POST", `/v1/agents/${encodeURIComponent(agentId)}/extend`, { body });
+  }
+
+  /**
    * GET /v1/agents/{id}/cdp: returns `cdp_url`, the page-level CDP
    * WebSocket of a running agent (it needs auth). Note: this endpoint (and
    * getAgent) give it with a placeholder page id (".../ws/page/..."); only
@@ -2805,9 +2901,10 @@ export class Client {
     return r.cdp_url ?? "";
   }
 
-  async openSession(agentId: string, opts: { ttl?: string } = {}): Promise<Record<string, any>> {
+  async openSession(agentId: string, opts: { ttl?: string; idleTimeout?: string } = {}): Promise<Record<string, any>> {
     const body: Record<string, any> = {};
     if (opts.ttl != null) body.ttl = opts.ttl;
+    if (opts.idleTimeout != null) body.idle_timeout = opts.idleTimeout;
     return this.request("POST", `/v1/agents/${encodeURIComponent(agentId)}/sessions`, { body });
   }
 

@@ -11,6 +11,8 @@ from browsa.errors import BrowsaError, RateLimitError
 from crewai.tools import BaseTool, EnvVar
 from pydantic import Field, PrivateAttr
 
+from crewai_browsa._version import __version__
+
 _ToolFailure: Any
 try:  # crewai versions with ToolFailure record a returned one as a failed call.
     from crewai.tools import ToolFailure as _ToolFailure
@@ -20,6 +22,17 @@ except ImportError:  # pragma: no cover - exercised by a test that hides it
 API_KEY_ENV = "BROWSA_API_KEY"
 BASE_URL_ENV = "BROWSA_BASE_URL"
 DEFAULT_BASE_URL = "https://browsa.io"
+# Added to the SDK's User-Agent so Browsa can count calls through this package.
+USER_AGENT_SUFFIX = f"crewai-browsa/{__version__}"
+
+
+def _new_client(**kwargs: Any) -> Any:
+    """browsa.Client with the User-Agent suffix; an SDK release from before
+    user_agent_suffix gets the plain call."""
+    try:
+        return Client(user_agent_suffix=USER_AGENT_SUFFIX, **kwargs)
+    except TypeError:
+        return Client(**kwargs)
 
 # Error codes after which the same call may well work: no free browser
 # slot (429), Browsa's browser failed (502 UPSTREAM_UNAVAILABLE), a timeout.
@@ -124,7 +137,7 @@ class BrowsaBaseTool(BaseTool):
                     f"A Browsa API key is required: pass api_key=... or set {API_KEY_ENV}. "
                     "Create one at https://app.browsa.io/dashboard/keys"
                 )
-            client = Client(
+            client = _new_client(
                 api_key=key,
                 base_url=base_url or os.getenv(BASE_URL_ENV) or DEFAULT_BASE_URL,
             )

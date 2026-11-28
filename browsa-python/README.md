@@ -120,6 +120,9 @@ job = c.run_task(
     task="Open the product page and return title, price and in_stock",
     llm="browsa",
     initial_url=f"{BOOK}/sharp-objects_997/index.html",
+    # Typed fields become the robot's columns (and what monitors can watch)
+    output_schema={"type": "object", "required": ["title", "price", "in_stock"], "properties": {
+        "title": {"type": "string"}, "price": {"type": "string"}, "in_stock": {"type": "boolean"}}},
     record_recipe=True,
 )
 
@@ -239,7 +242,7 @@ job = c.run_task(
 
 ### Interactive (input_required) tasks
 
-If your task can pause for human input (captcha, decision point), watch for status `input_required` and respond. Hosted tasks solve reCAPTCHA v2 image grids (3 x 3, 4 x 4 and reloading tiles), image-text captchas, GeeTest slide puzzles (v3 and v4) and AWS WAF captchas in the browser's own session on workspaces that have bought a pack (fair use applies); the types and measured pass rates are at https://browsa.io/captcha. A type that is not supported yet, or a workspace on free credits only, may still need you here. Respond like this:
+If your task can pause for human input (captcha, decision point), watch for status `input_required` and respond. Hosted tasks solve reCAPTCHA v2 picture grids (3 x 3, 4 x 4 and reloading tiles) and its audio challenge, hCaptcha, image-text captchas, GeeTest v3 and v4 puzzles, Tencent, NetEase Yidun and Dingxiang puzzles, MTCaptcha, Cutcaptcha, CyberSiARA and AWS WAF captchas (reCAPTCHA v3, Turnstile and Cloudflare's page check pass in the Phantom session by themselves) in the browser's own session: 25 free solves to try (up to 10 a day), then included with any pack (fair use 300 an hour, 3,000 a day); the types and measured pass rates are at https://browsa.io/captcha. A type that is not supported yet, or a workspace whose free solves are used and that has no pack, may still need you here. Respond like this:
 
 ```python
 job = c.create_task(task="...", llm="...", llm_api_key="...")

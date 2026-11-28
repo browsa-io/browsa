@@ -6,6 +6,9 @@ import type {
 	INodeProperties,
 } from 'n8n-workflow';
 
+/** Sent on every call (Browsa counts API calls per client and version). Kept equal to package.json's version by a test. */
+export const USER_AGENT = 'n8n-nodes-browsa/0.2.0';
+
 export class BrowsaApi implements ICredentialType {
 	name = 'browsaApi';
 
@@ -34,6 +37,7 @@ export class BrowsaApi implements ICredentialType {
 		properties: {
 			headers: {
 				'X-API-Key': '={{$credentials.apiKey}}',
+				'User-Agent': USER_AGENT,
 			},
 		},
 	};

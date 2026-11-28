@@ -3,8 +3,10 @@
 // BROWSA_BASE_URL points at another copy (staging).
 
 import { BrowsaError } from "browsa";
-import { API_KEY, BASE_URL, BASE_URL_SET, numEnv } from "../config.js";
+import { API_KEY, BASE_URL, BASE_URL_SET, numEnv, USER_AGENT } from "../config.js";
 import { backoffMs, fetchRetry, RETRIES, sleep } from "../retry.js";
+
+const CAPTCHA_UA = `${USER_AGENT} (captcha)`;
 
 export const CAPTCHA_URL = (process.env.BROWSA_CAPTCHA_URL ||
   (BASE_URL_SET ? `${BASE_URL}/captcha-api` : "https://captcha.browsa.io"))
@@ -28,10 +30,10 @@ export async function captchaCall(method: string, payload: Record<string, unknow
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const retries = opts.retries ?? RETRIES;
   const init = (): RequestInit => payload === null
-    ? { method: "GET", headers: { Accept: "application/json", "User-Agent": "browsa-mcp" }, signal: AbortSignal.timeout(timeoutMs) }
+    ? { method: "GET", headers: { Accept: "application/json", "User-Agent": CAPTCHA_UA }, signal: AbortSignal.timeout(timeoutMs) }
     : {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "browsa-mcp" },
+      headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": CAPTCHA_UA },
       body: JSON.stringify({ clientKey: API_KEY, ...payload }),
       signal: AbortSignal.timeout(timeoutMs),
     };

@@ -150,6 +150,13 @@ class Job:
     session_id: Optional[str] = None
     session_url: Optional[str] = None
     turn: Optional[int] = None
+    # keep_open: the browser the task kept open (agent_id, status,
+    # expires_at, until_stopped, live_url, extend_url, messages_url...), a
+    # dict as the API returns it; None when it closed with the task.
+    # keep_open is the value the API accepted, on the 202 ("15m", "4h",
+    # "until_stopped", "none").
+    browser: Optional[dict] = None
+    keep_open: Optional[str] = None
     # Saved LLM key the job used (never the secret). llm_key_source is
     # "saved" when chosen by llm_key_id, "default" for the workspace default.
     llm_key_id: Optional[str] = None
@@ -237,6 +244,8 @@ class Job:
             session_id=body.get("session_id"),
             session_url=body.get("session_url"),
             turn=body.get("turn"),
+            browser=body.get("browser") if isinstance(body.get("browser"), dict) else None,
+            keep_open=body.get("keep_open") if isinstance(body.get("keep_open"), str) else None,
             llm_key_id=body.get("llm_key_id"),
             llm_key_masked=body.get("llm_key_masked"),
             llm_key_source=body.get("llm_key_source"),
@@ -344,6 +353,12 @@ class SessionBrowser:
     expires_at: Optional[str] = None
     expires_in_seconds: Optional[int] = None
     credits: int = 0
+    # Long browsers (keep_open): no fixed end, the chosen end (None when
+    # until stopped) and the time paid so far. None without a lifetime.
+    until_stopped: Optional[bool] = None
+    ends_at: Optional[str] = None
+    paid_until: Optional[str] = None
+    idle_timeout_seconds: Optional[int] = None
 
     @classmethod
     def from_response(cls, body: dict) -> "SessionBrowser":
@@ -354,6 +369,10 @@ class SessionBrowser:
             expires_at=body.get("expires_at"),
             expires_in_seconds=body.get("expires_in_seconds"),
             credits=int(body.get("credits") or 0),
+            until_stopped=body.get("until_stopped") if isinstance(body.get("until_stopped"), bool) else None,
+            ends_at=body.get("ends_at"),
+            paid_until=body.get("paid_until"),
+            idle_timeout_seconds=body.get("idle_timeout_seconds"),
         )
 
 

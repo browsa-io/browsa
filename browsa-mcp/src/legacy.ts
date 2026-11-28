@@ -6,7 +6,7 @@ import { Client } from "browsa";
 import { apiGet, apiPost, BrowsaError } from "./api.js";
 import { captchaCall, runCaptchaTask } from "./captcha/client.js";
 import { chargedCredits, guardedSolve, priceOf } from "./captcha/tools.js";
-import { API_KEY, BASE_URL, BASE_URL_SET } from "./config.js";
+import { API_KEY, BASE_URL, BASE_URL_SET, USER_AGENT } from "./config.js";
 
 // Unset by default: with a saved key the server picks the model for the
 // key's provider. A per-task key (llm_api_key) needs a model, so it gets
@@ -110,6 +110,19 @@ export const legacyTools = [
           type: "boolean",
           description: "Set false to stop the run from saving a login it creates as a workspace secret (on by default).",
         },
+        keep_open: {
+          type: "string",
+          description:
+            "Keep the browser open after the task: \"15m\", \"1h\", \"4h\", \"8h\", \"24h\", any duration, or " +
+            "\"until_stopped\"; \"none\" (the default here) closes it. The result's `browser` gives its agent_id, " +
+            "expires_at and live_url, so the user can take over, extend it (POST /v1/agents/{id}/extend) or send a " +
+            "follow-up task on it (POST /v1/sessions/{session_id}/messages). Billed per minute like any browser; over 1h and " +
+            "until_stopped need a workspace that has bought credits.",
+        },
+        idle_timeout: {
+          type: "string",
+          description: "With keep_open: stop after this long with nothing connected, e.g. \"10m\"; \"off\" = never.",
+        },
         timeout_minutes: {
           type: "integer",
           description: "Max wall-clock minutes to wait before returning. Default 10.",
@@ -175,7 +188,8 @@ export const legacyTools = [
     inputSchema: {
       type: "object",
       properties: {
-        ttl: { type: "string", description: "How long to keep it, e.g. \"5m\" or \"1h\". Default 10m." },
+        ttl: { type: "string", description: "How long to keep it, e.g. \"5m\", \"1h\", \"8h\" (up to 24h) or \"until_stopped\". Default 10m. Over 1h needs purchased credits." },
+        idle_timeout: { type: "string", description: "Stop after this long with nothing connected, e.g. \"10m\"; \"off\" = never." },
         country: { type: "string", description: "ISO-2 country, e.g. \"us\". Takes effect only with a proxy." },
         os_type: { type: "string", description: "Operating system the browser presents, e.g. \"macos\", \"windows\"." },
         profile_id: {
@@ -556,7 +570,7 @@ function llmKeyError(e: InstanceType<typeof BrowsaError>, choice: LlmChoice) {
 // proxyNetwork(). An API without the endpoint (404) reads as not enabled.
 async function proxyNetwork() {
   const resp = await fetch(`${BASE_URL}/v1/proxy-network`, {
-    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": "browsa-mcp" },
+    headers: { "X-API-Key": API_KEY!, Accept: "application/json", "User-Agent": USER_AGENT },
   });
   const body: any = await resp.json().catch(() => ({}));
   if (resp.status === 404) return { enabled: false, tiers: [] };
@@ -806,6 +820,8 @@ export async function callLegacy(name: string, args: Record<string, any>) {
             // Sent as is (snake_case) and only when given.
             secret_ids: Array.isArray(args.secret_ids) && args.secret_ids.length ? args.secret_ids : undefined,
             save_secrets: typeof args.save_secrets === "boolean" ? args.save_secrets : undefined,
+            keep_open: typeof args.keep_open === "string" && args.keep_open ? args.keep_open : undefined,
+            idle_timeout: typeof args.idle_timeout === "string" && args.idle_timeout ? args.idle_timeout : undefined,
             timeoutMs: (args.timeout_minutes ?? 10) * 60_000,
           }),
         );
@@ -825,6 +841,7 @@ export async function callLegacy(name: string, args: Record<string, any>) {
           final_result: job.finalResult,
           error: job.errorMessage,
           error_code: job.errorCode,
+          ...keptBrowserFields(job.raw),
         });
       }
       case "get_job": {
@@ -855,6 +872,7 @@ export async function callLegacy(name: string, args: Record<string, any>) {
       case "start_browser": {
         const a = await client.createAgent({
           ttl: args.ttl ?? "10m",
+          idle_timeout: args.idle_timeout,
           country: args.country ?? DEFAULT_COUNTRY,
           osType: args.os_type,
           agent_id: args.profile_id,
@@ -962,4 +980,22 @@ export async function callLegacy(name: string, args: Record<string, any>) {
     }
     return fail((e as Error).message || String(e));
   }
+}
+
+// The browser a task kept open (keep_open): where it is and how long it stays.
+export function keptBrowserFields(raw: any): Record<string, unknown> {
+  const b = raw && typeof raw === "object" ? raw.browser : null;
+  if (!b || typeof b !== "object" || !b.agent_id) return {};
+  return {
+    session_id: raw.session_id ?? b.session_id,
+    browser: {
+      agent_id: b.agent_id,
+      status: b.status,
+      expires_at: b.expires_at,
+      until_stopped: b.until_stopped,
+      live_url: b.live_url,
+      extend_url: b.extend_url,
+      messages_url: b.messages_url,
+    },
+  };
 }

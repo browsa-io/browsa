@@ -617,7 +617,7 @@ export class Browsa implements INodeType {
 						displayName: 'Operating System',
 						name: 'osType',
 						type: 'options',
-						default: 'OS_TYPE_MACOS',
+						default: 'OS_TYPE_LINUX',
 						options: [
 							{ name: 'Linux', value: 'OS_TYPE_LINUX' },
 							{ name: 'macOS', value: 'OS_TYPE_MACOS' },
